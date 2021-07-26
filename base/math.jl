@@ -717,7 +717,6 @@ _anynan(x, y) = isnan(x) | isnan(y)
 _isless(x, y) = (x < y) | (signbit(y) < signbit(x))
 
 min(x::T, y::T) where {T<:AbstractFloat} = _anynan(x, y) ? oftype(x, NaN) : _isless(x, y) ? x : y
-
 max(x::T, y::T) where {T<:AbstractFloat} = _anynan(x, y) ? oftype(x, NaN) : _isless(x, y) ? y : x
 
 min(x::T, y::T) where {T<:Union{Float32, Float64}} =
@@ -727,7 +726,6 @@ max(x::T, y::T) where {T<:Union{Float32, Float64}} =
     ifelse(_anynan(x, y), T(NaN), ifelse(_isless(x, y), y, x))
 
 minmax(x::T, y::T) where {T<:AbstractFloat} = min(x, y), max(x, y)
-
 
 """
     ldexp(x, n)
