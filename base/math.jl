@@ -713,16 +713,20 @@ end
 atan(y::Real, x::Real) = atan(promote(float(y),float(x))...)
 atan(y::T, x::T) where {T<:AbstractFloat} = Base.no_op_err("atan", T)
 
-max(x::T, y::T) where {T<:AbstractFloat} = ifelse((y > x) | (signbit(y) < signbit(x)),
-                                    ifelse(isnan(x), x, y), ifelse(isnan(y), y, x))
+_anynan(x, y) = isnan(x) | isnan(y)
+_isless(x, y) = (x < y) | (signbit(y) < signbit(x))
 
+min(x::T, y::T) where {T<:AbstractFloat} = _anynan(x, y) ? oftype(x, NaN) : _isless(x, y) ? x : y
 
-min(x::T, y::T) where {T<:AbstractFloat} = ifelse((y < x) | (signbit(y) > signbit(x)),
-                                    ifelse(isnan(x), x, y), ifelse(isnan(y), y, x))
+max(x::T, y::T) where {T<:AbstractFloat} = _anynan(x, y) ? oftype(x, NaN) : _isless(x, y) ? y : x
 
-minmax(x::T, y::T) where {T<:AbstractFloat} =
-    ifelse(isnan(x) | isnan(y), ifelse(isnan(x), (x,x), (y,y)),
-           ifelse((y > x) | (signbit(x) > signbit(y)), (x,y), (y,x)))
+min(x::T, y::T) where {T<:Union{Float32, Float64}} =
+    ifelse(_anynan(x, y), T(NaN), ifelse(_isless(x, y), x, y))
+
+max(x::T, y::T) where {T<:Union{Float32, Float64}} =
+    ifelse(_anynan(x, y), T(NaN), ifelse(_isless(x, y), y, x))
+
+minmax(x::T, y::T) where {T<:AbstractFloat} = min(x, y), max(x, y)
 
 
 """
