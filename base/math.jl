@@ -716,16 +716,12 @@ atan(y::T, x::T) where {T<:AbstractFloat} = Base.no_op_err("atan", T)
 _anynan(x, y) = isnan(x) | isnan(y)
 _isless(x, y) = (x < y) | (signbit(y) < signbit(x))
 
-min(x::T, y::T) where {T<:AbstractFloat} = _anynan(x, y) ? oftype(x, NaN) : _isless(x, y) ? x : y
-max(x::T, y::T) where {T<:AbstractFloat} = _anynan(x, y) ? oftype(x, NaN) : _isless(x, y) ? y : x
-
-min(x::T, y::T) where {T<:Union{Float32, Float64}} =
-    ifelse(_anynan(x, y), T(NaN), ifelse(_isless(x, y), x, y))
-
-max(x::T, y::T) where {T<:Union{Float32, Float64}} =
-    ifelse(_anynan(x, y), T(NaN), ifelse(_isless(x, y), y, x))
-
+min(x::T, y::T) where {T<:AbstractFloat} = ifelse(_anynan(x, y), T(NaN), ifelse(_isless(x, y), x, y))
+max(x::T, y::T) where {T<:AbstractFloat} = ifelse(_anynan(x, y), T(NaN), ifelse(_isless(x, y), y, x))
 minmax(x::T, y::T) where {T<:AbstractFloat} = min(x, y), max(x, y)
+
+min(x::Float16, y::Float16) = _anynan(x, y) ? NaN16 : isless(x, y) ? x : y
+max(x::Float16, y::Float16) = _anynan(x, y) ? NaN16 : isless(x, y) ? y : x
 
 """
     ldexp(x, n)
