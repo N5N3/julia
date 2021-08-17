@@ -713,15 +713,17 @@ end
 atan(y::Real, x::Real) = atan(promote(float(y),float(x))...)
 atan(y::T, x::T) where {T<:AbstractFloat} = Base.no_op_err("atan", T)
 
-_anynan(x, y) = isnan(x) | isnan(y)
-_isless(x, y) = (x < y) | (signbit(y) < signbit(x))
-
-min(x::T, y::T) where {T<:AbstractFloat} = ifelse(_anynan(x, y), T(NaN), ifelse(_isless(x, y), x, y))
-max(x::T, y::T) where {T<:AbstractFloat} = ifelse(_anynan(x, y), T(NaN), ifelse(_isless(x, y), y, x))
+_isless(x::T, y::T) where {T<:AbstractFloat} = (x < y) || (signbit(x) > signbit(y))
+min(x::T, y::T) where {T<:AbstractFloat} = isnan(x) || ~isnan(y) && _isless(x, y) ? x : y
+max(x::T, y::T) where {T<:AbstractFloat} = isnan(x) || ~isnan(y) && _isless(y, x) ? x : y
 minmax(x::T, y::T) where {T<:AbstractFloat} = min(x, y), max(x, y)
 
-min(x::Float16, y::Float16) = _anynan(x, y) ? NaN16 : isless(x, y) ? x : y
-max(x::Float16, y::Float16) = _anynan(x, y) ? NaN16 : isless(x, y) ? y : x
+FastFloat = Union{Float32, Float64}
+_isless(x::T, y::T) where {T<:FastFloat} = signbit(x - y)
+min(x::T, y::T) where {T<:FastFloat} = ifelse(isnan(x) | ~isnan(y) & _isless(x, y), x, y)
+max(x::T, y::T) where {T<:FastFloat} = ifelse(isnan(x) | ~isnan(y) & _isless(y, x), x, y)
+
+_isless(x::Float16, y::Float16) = _isless(widen(x), widen(y))
 
 """
     ldexp(x, n)
