@@ -1564,7 +1564,7 @@ static jl_cgval_t typed_store(jl_codectx_t &ctx,
             ret = mark_julia_type(ctx, callval, true, jl_any_type);
         }
         if (!jl_subtype(ret.typ, jltype)) {
-            emit_typecheck(ctx, ret, jltype, fname + "typed_store");
+            emit_typecheck(ctx, ret, jltype, fname);
             ret = update_julia_type(ctx, ret, jltype);
         }
         return ret;
@@ -3593,7 +3593,7 @@ static Value *emit_defer_signal(jl_codectx_t &ctx)
     return ctx.builder.CreateInBoundsGEP(T_sigatomic, ptls, ArrayRef<Value*>(offset), "jl_defer_signal");
 }
 
-#ifndef NDEBUG
+#ifndef JL_NDEBUG
 static int compare_cgparams(const jl_cgparams_t *a, const jl_cgparams_t *b)
 {
     return

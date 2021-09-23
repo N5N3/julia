@@ -239,6 +239,7 @@ function lmul!(D::Diagonal, B::AbstractVecOrMat)
     return B
 end
 
+#TODO: It seems better to call (D' * adjA')' directly?
 function *(adjA::Adjoint{<:Any,<:AbstractMatrix}, D::Diagonal)
     A = adjA.parent
     Ac = similar(A, promote_op(*, eltype(A), eltype(D.diag)), (size(A, 2), size(A, 1)))
@@ -349,6 +350,7 @@ end
 ldiv!(x::AbstractVecOrMat, A::Diagonal, b::AbstractVecOrMat) = (x .= A.diag .\ b)
 
 function ldiv!(D::Diagonal, B::AbstractVecOrMat)
+    require_one_based_indexing(B)
     m, n = size(B, 1), size(B, 2)
     if m != length(D.diag)
         throw(DimensionMismatch("diagonal matrix is $(length(D.diag)) by $(length(D.diag)) but right hand side has $m rows"))
@@ -412,7 +414,7 @@ end
 kron(A::Diagonal{<:Number}, B::Diagonal{<:Number}) = Diagonal(kron(A.diag, B.diag))
 
 @inline function kron!(C::AbstractMatrix, A::Diagonal, B::AbstractMatrix)
-    Base.require_one_based_indexing(B)
+    require_one_based_indexing(B)
     (mA, nA) = size(A)
     (mB, nB) = size(B)
     (mC, nC) = size(C)
