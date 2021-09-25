@@ -567,6 +567,7 @@ end
     @test findlast(!iszero, a) == 8
     @test findlast(a.==0) == 5
     @test findlast(a.==5) == nothing
+    @test findlast(false) == nothing # test non-AbstractArray findlast
     @test findlast(isequal(3), [1,2,4,1,2,3,4]) == 6
     @test findlast(isodd, [2,4,6,3,9,2,0]) == 5
     @test findlast(isodd, [2,4,6,2,0]) == nothing
@@ -1574,6 +1575,12 @@ end
     @test_throws BoundsError reverse!([1:10;], 1, 11)
     @test_throws BoundsError reverse!([1:10;], 0, 10)
     @test reverse!(Any[]) == Any[]
+end
+
+@testset "reverseind" begin
+    @test reverseind([1, 2, 3], 2) == 2
+    @test reverseind([1, 2, 3], 0) == 4
+    @test reverseind([1, 2, 3], 3) == 1
 end
 
 @testset "reverse dim" begin
