@@ -418,6 +418,16 @@ jl_svec_t *jl_perm_symsvec(size_t n, ...);
                 "Number of passed arguments does not match expected number"); \
             n;                                                                \
         }), __VA_ARGS__)
+#ifdef jl_svec
+#undef jl_svec
+#define jl_svec(n, ...) \
+    (ijl_svec)(__extension__({                                                \
+            static_assert(                                                    \
+                n == sizeof((void *[]){ __VA_ARGS__ })/sizeof(void *),        \
+                "Number of passed arguments does not match expected number"); \
+            n;                                                                \
+        }), __VA_ARGS__)
+#else
 #define jl_svec(n, ...) \
     (jl_svec)(__extension__({                                                 \
             static_assert(                                                    \
@@ -425,6 +435,7 @@ jl_svec_t *jl_perm_symsvec(size_t n, ...);
                 "Number of passed arguments does not match expected number"); \
             n;                                                                \
         }), __VA_ARGS__)
+#endif
 #endif
 #endif
 
@@ -730,7 +741,7 @@ void jl_init_intrinsic_functions(void);
 void jl_init_intrinsic_properties(void);
 void jl_init_tasks(void) JL_GC_DISABLED;
 void jl_init_stack_limits(int ismaster, void **stack_hi, void **stack_lo);
-void jl_init_root_task(jl_ptls_t ptls, void *stack_lo, void *stack_hi);
+jl_task_t *jl_init_root_task(jl_ptls_t ptls, void *stack_lo, void *stack_hi);
 void jl_init_serializer(void);
 void jl_gc_init(void);
 void jl_init_uv(void);

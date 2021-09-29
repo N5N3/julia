@@ -851,6 +851,11 @@ end
     @test mul!(outTri, D, UTriA)::Tri == mul!(out, D, Matrix(UTriA))
     @test mul!(outTri, TriA, D)::Tri == mul!(out, Matrix(TriA), D)
     @test mul!(outTri, UTriA, D)::Tri == mul!(out, Matrix(UTriA), D)
+    # 5 args
+    @test mul!(outTri, D, TriA, 2, 1)::Tri == mul!(out, D, Matrix(TriA), 2, 1)
+    @test mul!(outTri, D, UTriA, 2, 1)::Tri == mul!(out, D, Matrix(UTriA), 2, 1)
+    @test mul!(outTri, TriA, D, 2, 1)::Tri == mul!(out, Matrix(TriA), D, 2, 1)
+    @test mul!(outTri, UTriA, D, 2, 1)::Tri == mul!(out, Matrix(UTriA), D, 2, 1)
 end
 
 end # module TestDiagonal
