@@ -1046,12 +1046,15 @@ function call_call_ambig(b::Bool)
 end
 @test !fully_eliminated(call_call_ambig, Tuple{Bool})
 
+# Make sure `isivdepsafe` for Broadcast is fully_eliminated after `instantiate`
 bc = Base.broadcasted(+,randn(1),randn(1))
 bc = Base.broadcasted(sin,bc)
 bc = Base.broadcasted(exp,bc)
 bc = Base.broadcasted(^,bc,randn(1))
 bc = Base.broadcasted(-,bc,randn(1))
+@test !fully_eliminated(Broadcast.isivdepsafe, Base.typesof(bc))
 bc = Broadcast.instantiate(bc)
-f(bc) = Core.Compiler.infer_effects(Broadcast._broadcast_getindex, Tuple{typeof(bc),eltype(eachindex(bc))})
-@test fully_eliminated(f, Base.typesof(bc))
+@test fully_eliminated(Broadcast.isivdepsafe, Base.typesof(bc))
+bc = Broadcast.preprocess(nothing, bc)
+@test fully_eliminated(Broadcast.isivdepsafe, Base.typesof(bc))
 @test f(bc).effect_free == Core.Compiler.ALWAYS_TRUE

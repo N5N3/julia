@@ -49,7 +49,6 @@ ci(x) = CartesianIndex(x)
 @test @inferred(newindex(ci((2,2)), (true, false), (-1,-1)))  == ci((2,-1))
 @test @inferred(newindex(ci((2,2)), (false, true), (-1,-1)))  == ci((-1,2))
 @test @inferred(newindex(ci((2,2)), (false, false), (-1,-1))) == ci((-1,-1))
-@test @inferred(newindex(ci((2,2)), (true,), (-1,-1)))   == ci((2,))
 @test @inferred(newindex(ci((2,2)), (true,), (-1,)))   == ci((2,))
 @test @inferred(newindex(ci((2,2)), (false,), (-1,))) == ci((-1,))
 @test @inferred(newindex(ci((2,2)), (), ())) == ci(())
@@ -427,6 +426,13 @@ end
 @test (+).(Ref(1), Ref(2)) == 3
 @test (+).([[0,2], [1,3]], Ref{Vector{Int}}([1,-1])) == [[1,1], [2,2]]
 
+# Some as 0-dimensional array for broadcast
+@test (-).(C_NULL, C_NULL)::UInt == 0
+@test (+).(1, Some(2)) == 3
+@test (+).(Some(1), Some(2)) == 3
+@test (+).([[0,2], [1,3]], Some{Vector{Int}}([1,-1])) == [[1,1], [2,2]]
+
+
 # Check that broadcast!(f, A) populates A via independent calls to f (#12277, #19722),
 # and similarly for broadcast!(f, A, numbers...) (#19799).
 @test let z = 1; A = broadcast!(() -> z += 1, zeros(2)); A[1] != A[2]; end
@@ -573,6 +579,11 @@ let io = IOBuffer()
     broadcast(x -> print(io, x), [Ref(1.0)])
     @test String(take!(io)) == "Base.RefValue{Float64}(1.0)"
 end
+@test getindex.([Some(1), Some(2)]) == [1, 2]
+let io = IOBuffer()
+    broadcast(x -> print(io, x), [Some(1.0)])
+    @test String(take!(io)) == "Some(1.0)"
+end
 
 # Test that broadcast's promotion mechanism handles closures accepting more than one argument.
 # (See issue #19641 and referenced issues and pull requests.)
@@ -635,7 +646,7 @@ end
     @test broadcast(foo, "x", [1, 2, 3]) == ["hello", "hello", "hello"]
 
     @test isequal(
-        [Set([1]), Set([2])] .∪ Ref(Set([3])),
+        [Set([1]), Set([2])] .∪ Some(Set([3])),
         [Set([1, 3]), Set([2, 3])])
 end
 
@@ -772,13 +783,19 @@ end
 
 # issue #27988: inference of Broadcast.flatten
 using .Broadcast: Broadcasted
-let
+let _cat_nested(bc) = Broadcast.flatten(bc).args
     bc = Broadcasted(+, (Broadcasted(*, (1, 2)), Broadcasted(*, (Broadcasted(*, (3, 4)), 5))))
-    @test @inferred(Broadcast.cat_nested(bc)) == (1,2,3,4,5)
+    @test @inferred(_cat_nested(bc)) == (1,2,3,4,5)
     @test @inferred(Broadcast.materialize(Broadcast.flatten(bc))) == @inferred(Broadcast.materialize(bc)) == 62
     bc = Broadcasted(+, (Broadcasted(*, (1, Broadcasted(/, (2.0, 2.5)))), Broadcasted(*, (Broadcasted(*, (3, 4)), 5))))
-    @test @inferred(Broadcast.cat_nested(bc)) == (1,2.0,2.5,3,4,5)
+    @test @inferred(_cat_nested(bc)) == (1,2.0,2.5,3,4,5)
     @test @inferred(Broadcast.materialize(Broadcast.flatten(bc))) == @inferred(Broadcast.materialize(bc)) == 60.8
+    # 1 .* 1 .- 1 .* 1 .^2 .+ 1 .* 1 .+ 1 .^ 3
+    bc = Broadcasted(+, (Broadcasted(+, (Broadcasted(-, (Broadcasted(*, (1, 1)), Broadcasted(*, (1, Broadcasted(Base.literal_pow, (Ref(^), 1, Ref(Val(2)))))))), Broadcasted(*, (1, 1)))), Broadcasted(Base.literal_pow, (Base.RefValue{typeof(^)}(^), 1, Base.RefValue{Val{3}}(Val{3}())))))
+    @test @inferred(Broadcast.materialize(Broadcast.flatten(bc))) == @inferred(Broadcast.materialize(bc)) == 2
+    # @. 1 + 1 * (1 + 1 + 1 + 1)
+    bc = Broadcasted(+, (1, Broadcasted(*, (1, Broadcasted(+, (1, 1, 1, 1))))))
+    @test @inferred(_cat_nested(bc)) == (1,1,1,1,1,1) # `cat_nested` failed to infer this
 end
 
 let
@@ -916,7 +933,7 @@ end
     @test reduce(paren, bcraw) == foldl(paren, xs)
 
     # issue #41055
-    bc = Broadcast.instantiate(Broadcast.broadcasted(Base.literal_pow, Ref(^), [1,2], Ref(Val(2))))
+    bc = Broadcast.instantiate(Broadcast.broadcasted(Base.literal_pow, Some(^), [1,2], Some(Val(2))))
     @test sum(bc, dims=1, init=0) == [5]
     bc = Broadcast.instantiate(Broadcast.broadcasted(*, ['a','b'], 'c'))
     @test prod(bc, dims=1, init="") == ["acbc"]
@@ -1031,25 +1048,17 @@ end
     @test Cyclotomic() .* [2, 3] == [[1, 2], [1, 2]]
 end
 
+isdefined(Main, :OffsetArrays) || @eval Main include("testhelpers/OffsetArrays.jl")
+using .Main.OffsetArrays
 @testset "inplace broadcast with trailing singleton dims" begin
-    for (a, b, c) in (([1, 2], reshape([3 4], :, 1), reshape([5, 6], :, 1, 1)),
+    for (a_, b_, c_) in (([1, 2], reshape([3 4], :, 1), reshape([5, 6], :, 1, 1)),
             ([1 2; 3 4], reshape([5 6; 7 8], 2, 2, 1), reshape([9 10; 11 12], 2, 2, 1, 1)))
-
-        a_ = copy(a)
-        a_ .= b
-        @test a_ == dropdims(b, dims=(findall(==(1), size(b))...,))
-
-        a_ = copy(a)
-        a_ .= b
-        @test a_ == dropdims(b, dims=(findall(==(1), size(b))...,))
-
-        a_ = copy(a)
-        a_ .= b .+ c
-        @test a_ == dropdims(b .+ c, dims=(findall(==(1), size(c))...,))
-
-        a_ = copy(a)
-        a_ .*= c
-        @test a_ == dropdims(a .* c, dims=(findall(==(1), size(c))...,))
+        for fun in (x -> OffsetArray(x, ntuple(Returns(1), ndims(x))), identity)
+            a, b, c = fun(a_), fun(b_), fun(c_)
+            @test (deepcopy(a) .= b) == dropdims(b, dims=(findall(==(1), size(b))...,))
+            @test (deepcopy(a) .= b .+ c) == dropdims(b .+ c, dims=(findall(==(1), size(c))...,))
+            @test (deepcopy(a) .*= c)  == dropdims(a .* c, dims=(findall(==(1), size(c))...,))
+        end
     end
 end
 
@@ -1063,16 +1072,6 @@ end
     buf = IOBuffer()
     @test println.(buf, [1,2,3]) == [nothing, nothing, nothing]
     @test String(take!(buf)) == "1\n2\n3\n"
-end
-
-@testset "Memory allocation inconsistency in broadcasting #41565" begin
-    function test(y)
-        y .= 0 .- y ./ (y.^2) # extra allocation
-        return y
-    end
-    arr = rand(1000)
-    @allocated test(arr)
-    @test (@allocated test(arr)) == 0
 end
 
 @testset "Fix type unstable .&& #43470" begin
@@ -1100,16 +1099,12 @@ end
     bc = Broadcast.instantiate(Broadcast.broadcasted(+,[1],view([1],1:1)))
     @test Broadcast.isivdepsafe(bc)
     bc = Broadcast.preprocess(nothing, bc)
-    let code = code_typed(Broadcast.isivdepsafe, Tuple{typeof(bc)})[1][1].code
-        @test length(code) == 1 && isa(code[1], Core.ReturnNode) && code[1].val
-    end
+    @test Broadcast.isivdepsafe(bc)
     a = Ref(1)
     f(x, y) = (a[i] = -a[i]; x + y + a[i];)
     bc = Broadcast.instantiate(Broadcast.broadcasted(f,[1],view([1],1:1)))
     bc = Broadcast.preprocess(nothing, bc)
-    let code = code_typed(Broadcast.isivdepsafe, Tuple{typeof(bc)})[1][1].code
-        @test length(code) == 1 && isa(code[1], Core.ReturnNode) && !(code[1].val)
-    end
+    @test !Broadcast.isivdepsafe(bc)
     a = randn(3,3)
     @test Broadcast.isivdepsafe(a)
     a = view(a,:,1:3)
