@@ -1079,3 +1079,20 @@ end
     y = randn(2)
     @inferred(test(x, y)) == [0, 0]
 end
+
+@testset "Inplace Broadcast vectorizaion" begin
+    bc = Broadcast.instantiate(Broadcast.broadcasted(+,[1],view([1],1:1)))
+    @test_broken Broadcast.isivdepsafe(bc) # arraysize is not `effect_free`
+    bc = Broadcast.preprocess(nothing, bc)
+    let code = code_typed(Broadcast.isivdepsafe, Tuple{typeof(bc)})[1][1].code
+        @test length(code) == 1 && isa(code[1], Core.ReturnNode) && code[1].val
+    end
+    a = randn(3,3)
+    @test Broadcast.isivdepsafe(a)
+    a = view(a,:,1:3)
+    @test Broadcast.isivdepsafe(a)
+    a = reshape(a, :)
+    @test Broadcast.isivdepsafe(a)
+    a = reinterpret(Int, a)
+    @test Broadcast.isivdepsafe(a)
+end
