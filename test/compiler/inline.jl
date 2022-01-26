@@ -1046,12 +1046,12 @@ function call_call_ambig(b::Bool)
 end
 @test !fully_eliminated(call_call_ambig, Tuple{Bool})
 
-# Test that a missing methtable identification gets tainted
-# appropriately
-struct FCallback; f::Union{Nothing, Function}; end
-f_invoke_callback(fc) = let f=fc.f; (f !== nothing && f(); nothing); end
-function f_call_invoke_callback(f::FCallback)
-    f_invoke_callback(f)
-    return nothing
-end
-@test !fully_eliminated(f_call_invoke_callback, Tuple{FCallback})
+bc = Base.broadcasted(+,randn(1),randn(1))
+bc = Base.broadcasted(sin,bc)
+bc = Base.broadcasted(exp,bc)
+bc = Base.broadcasted(^,bc,randn(1))
+bc = Base.broadcasted(-,bc,randn(1))
+bc = Broadcast.instantiate(bc)
+f(bc) = Core.Compiler.infer_effects(Broadcast._broadcast_getindex, Tuple{typeof(bc),eltype(eachindex(bc))})
+@test fully_eliminated(f, Base.typesof(bc))
+@test f(bc).effect_free == Core.Compiler.ALWAYS_TRUE
