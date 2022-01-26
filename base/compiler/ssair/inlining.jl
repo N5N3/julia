@@ -1147,7 +1147,7 @@ function process_simple!(ir::IRCode, idx::Int, state::InliningState, todo::Vecto
         ir[SSAValue(idx)][:inst] = lateres.val
         check_effect_free!(ir, idx, lateres.val, rt)
         return nothing
-    elseif is_return_type(sig.f)
+    elseif is_return_type(sig.f) || is_infer_effects(sig.f)
         check_effect_free!(ir, idx, stmt, rt)
         return nothing
     end
@@ -1482,7 +1482,7 @@ function late_inline_special_case!(
         unionall_call = Expr(:foreigncall, QuoteNode(:jl_type_unionall), Any, svec(Any, Any),
             0, QuoteNode(:ccall), nothing, stmt.args[2], stmt.args[3])
         return SomeCase(unionall_call)
-    elseif is_return_type(f)
+    elseif is_return_type(f) || is_infer_effects(f)
         if isconstType(type)
             return SomeCase(quoted(type.parameters[1]))
         elseif isa(type, Const)
