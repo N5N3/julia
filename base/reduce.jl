@@ -439,6 +439,9 @@ mapreduce(f, op, a::Number) = mapreduce_first(f, op, a)
 
 _mapreduce(f, op, ::IndexCartesian, A::AbstractArrayOrBroadcasted) = mapfoldl(f, op, A)
 
+@inline _mapreduce(f, op, ::IndexCartesian, A::AbstractVector) =
+    _mapreduce(f, op, IndexLinear(), A)
+
 """
     reduce(op, itr; [init])
 
@@ -605,63 +608,6 @@ julia> prod(1:5; init = 1.0)
 prod(a; kw...) = mapreduce(identity, mul_prod, a; kw...)
 
 ## maximum, minimum, & extrema
-_fast(::typeof(min),x,y) = min(x,y)
-_fast(::typeof(max),x,y) = max(x,y)
-function _fast(::typeof(max), x::AbstractFloat, y::AbstractFloat)
-    ifelse(isnan(x),
-        x,
-        ifelse(x > y, x, y))
-end
-
-function _fast(::typeof(min),x::AbstractFloat, y::AbstractFloat)
-    ifelse(isnan(x),
-        x,
-        ifelse(x < y, x, y))
-end
-
-isbadzero(::typeof(max), x::AbstractFloat) = (x == zero(x)) & signbit(x)
-isbadzero(::typeof(min), x::AbstractFloat) = (x == zero(x)) & !signbit(x)
-isbadzero(op, x) = false
-isgoodzero(::typeof(max), x) = isbadzero(min, x)
-isgoodzero(::typeof(min), x) = isbadzero(max, x)
-
-function mapreduce_impl(f, op::Union{typeof(max), typeof(min)},
-                        A::AbstractArrayOrBroadcasted, first::Int, last::Int)
-    a1 = @inbounds A[first]
-    v1 = mapreduce_first(f, op, a1)
-    v2 = v3 = v4 = v1
-    chunk_len = 256
-    start = first + 1
-    simdstop  = start + chunk_len - 4
-    while simdstop <= last - 3
-        @inbounds for i in start:4:simdstop
-            v1 = _fast(op, v1, f(A[i+0]))
-            v2 = _fast(op, v2, f(A[i+1]))
-            v3 = _fast(op, v3, f(A[i+2]))
-            v4 = _fast(op, v4, f(A[i+3]))
-        end
-        checkbounds(A, simdstop+3)
-        start += chunk_len
-        simdstop += chunk_len
-    end
-    v = op(op(v1,v2),op(v3,v4))
-    for i in start:last
-        @inbounds ai = A[i]
-        v = op(v, f(ai))
-    end
-
-    # enforce correct order of 0.0 and -0.0
-    # e.g. maximum([0.0, -0.0]) === 0.0
-    # should hold
-    if isbadzero(op, v)
-        for i in first:last
-            x = @inbounds A[i]
-            isgoodzero(op,x) && return x
-        end
-    end
-    return v
-end
-
 """
     maximum(f, itr; [init])
 
@@ -847,8 +793,15 @@ end
 ExtremaMap(::Type{T}) where {T} = ExtremaMap{Type{T}}(T)
 @inline (f::ExtremaMap)(x) = (y = f.f(x); (y, y))
 
-# TODO: optimize for inputs <: AbstractFloat
 @inline _extrema_rf((min1, max1), (min2, max2)) = (min(min1, min2), max(max1, max2))
+# optimization for IEEEFloat
+function _extrema_rf(x::NTuple{2,T}, y::NTuple{2,T}) where {T<:IEEEFloat}
+    (x1, x2), (y1, y2) = x, y
+    anynan = isnan(x1)|isnan(y1)
+    z1 = ifelse(anynan, x1-y1, ifelse(signbit(x1-y1), x1, y1))
+    z2 = ifelse(anynan, x1-y1, ifelse(signbit(x2-y2), y2, x2))
+    z1, z2
+end
 
 ## findmax, findmin, argmax & argmin
 
@@ -1203,6 +1156,25 @@ function _any(f, itr, ::Colon)
     return anymissing ? missing : false
 end
 
+# optimizations for Tuple
+# If eltype(x) is concrete. Use for loop
+any(f, x::NTuple{N}) where {N} = _any(f, x, :)
+# Otherwise force unroll to avoid union-split. (Only for small Tuple)
+function any(f, x::NTuple{N,Any}) where {N}
+    N >= 32 && return _any(f, x, :) # Not tuned, just follow Any32
+    _any_tuple(f, false, x...)
+end
+@inline function _any_tuple(f, anymissing::Bool, x, rest...)
+    v = f(x)
+    if ismissing(v)
+        anymissing = true
+    elseif v
+        return true
+    end
+    return _any_tuple(f, anymissing, rest...)
+end
+_any_tuple(f, anymissing) = anymissing ? missing : false
+
 """
     all(p, itr) -> Bool
 
@@ -1252,6 +1224,26 @@ function _all(f, itr, ::Colon)
     end
     return anymissing ? missing : true
 end
+
+# optimizations for Tuple
+# If eltype(x) is concrete. Use for loop
+all(f, x::NTuple{N}) where {N} = _all(f, x, :)
+# Otherwise force unroll to avoid union-split. (Only for small Tuple)
+function all(f, x::NTuple{N,Any}) where {N}
+    N >= 32 && return _all(f, x, :) # Not tuned, just follow Any32
+    _all_tuple(f, false, x...)
+end
+@inline function _all_tuple(f, anymissing, x, rest...)
+    v = f(x)
+    if ismissing(v)
+        anymissing = true
+    elseif v
+    else
+        return false
+    end
+    return _all_tuple(f, anymissing, rest...)
+end
+_all_tuple(f, anymissing) = anymissing ? missing : true
 
 ## count
 
@@ -1310,4 +1302,132 @@ function _simple_count(::typeof(identity), x::Array{Bool}, init::T=0) where {T}
         n = (n + x[i]) % T
     end
     return n
+end
+
+# simd optimization for min/max related reduction
+"""
+    _fast(min, x, y)
+    _fast(max, x, y)
+
+A help function to accelerate `minimum`/`maximum` for `IEEEFloat`.
+It's equivalent to `min(x, y)`/`max(x, y)` only when `(x, y)` contains no `NaN`.
+Make sure the inputs have been checked before usage.
+
+!!! note
+    Only for internal usage. Might be changed/deprecated in future.
+"""
+_fast(::typeof(min), x::T, y::T) where {T<:IEEEFloat} = ifelse(signbit(x-y), x, y)
+_fast(::typeof(max), x::T, y::T) where {T<:IEEEFloat} = ifelse(signbit(y-x), x, y)
+_fast(op) = (x, y) -> _fast(op, x, y)
+
+# Some help function for better vectorization.
+# To resolve TTFP (partially), use `Ref{NTuple{16}}` to emulate a stack-allocated Vector.
+# TODO: Use `Vector` instead once we have stack-allocated `Array`.
+function _anynan(x::Ptr{<:IEEEFloat})
+    r = false
+    for i in 1:8
+        r |= isnan(unsafe_load(x, i)) | isnan(unsafe_load(x, i+8))
+    end
+    return r
+end
+function _fast_load!(f, elm::Ptr{T}, A, i::Int, iter) where {T<:IEEEFloat}
+    @inbounds @simd for j in iter
+        unsafe_store!(elm, f(A[i+=1])::T, j)
+    end
+    return i
+end
+function _update!(op, x::Ptr{T}, y::Ptr{T}) where {T<:IEEEFloat}
+    @simd for i in 1:16
+        xi, yi = unsafe_load(x, i), unsafe_load(y, i)
+        unsafe_store!(x, op(xi, yi), i)
+    end
+end
+function _foldl(op, x::Ptr{<:IEEEFloat})
+    r = unsafe_load(x, 1)
+    for i in 2:16
+        r = op(r, unsafe_load(x, i))
+    end
+    return r
+end
+_picknan(vs::Ptr{<:IEEEFloat}) = _foldl((x, y) -> isnan(x) ? x : y, vs)
+
+# The optimized fallback for `IEEEFloat`'s min/max reduction. (LLVM handles `Integer` well)
+function mapreduce_impl(f::F, op::Union{typeof(max),typeof(min)},
+                        A::AbstractArrayOrBroadcasted, first::Int, last::Int) where {F}
+    T = A isa AbstractArray ? eltype(A) : (@default_eltype A)
+    Eltype = _return_type(f, Tuple{T})
+    # Call general fallback for non-IEEEFloat cases.
+    (isconcretetype(Eltype) && Eltype <: IEEEFloat) ||
+        return mapreduce_impl(f, op, A, first, last, pairwise_blocksize(f, op))
+    @inbounds v, i = f(A[first]), first
+    rest = last - first
+    if rest >= 8
+        vop = Ref(ntuple(Returns(v), Val(16)))        # 1. Simd Initialization.
+        GC.@preserve vop begin                        # 1a). If the unvectorized length < 8,
+            vopᵖ = unsafe_convert(Ref{Eltype}, vop)   #       use the first element to initialize.
+            if rest & 15 >= 8
+                i = _fast_load!(f, vopᵖ, A, i, 9:16)  # 1b). Otherwise load 8 more elements.
+            end
+            _anynan(vopᵖ) && return _picknan(vopᵖ)    # 1c). Ensure there's no NaN in initial values.
+        end
+        elm = Ref(vop[])
+        v = GC.@preserve vop elm begin                # 2. Simd reduction
+            vopᵖ = unsafe_convert(Ref{Eltype}, vop)
+            elmᵖ = unsafe_convert(Ref{Eltype}, elm)
+            while i <= last - 16
+                i = _fast_load!(f, elmᵖ, A, i, 1:16)  # 2a). Pick 16 elements.
+                _anynan(elmᵖ) && return _picknan(elmᵖ)# 2b). Ensure they are free of NaN.
+                _update!(_fast(op), vopᵖ, elmᵖ)       # 2c). Then `_fast(op)` is safe
+            end
+            _foldl(_fast(op), vopᵖ)                   # 2d). Reduce `vop`.
+        end
+    end
+    # 3. Reduce the rest elements.
+    # Note: If `f.(A)` contains mutipule NaNs, step 2 always returns the first one
+    # But step 3 might break this behavior, as the propagation
+    # order for multiple NaN is not specific.
+    # https://github.com/JuliaLang/julia/pull/41709#issuecomment-1017876618
+    @inbounds while i < last
+        v = op(v, f(A[i+=1]))
+    end
+    return v
+end
+
+function mapreduce_impl(f::ExtremaMap, op::typeof(_extrema_rf),
+                        A::AbstractArrayOrBroadcasted, first::Int, last::Int)
+    T = A isa AbstractArray ? eltype(A) : (@default_eltype A)
+    Eltype = _return_type(f.f, Tuple{T})
+    # Call general fallback for non-IEEEFloat cases.
+    (isconcretetype(Eltype) && Eltype <: IEEEFloat) ||
+        return mapreduce_impl(f, op, A, first, last, pairwise_blocksize(f, op))
+    @inbounds v, i = f(A[first]), first
+    rest = last - first
+    if rest >= 8
+        vmi = Ref(ntuple(Returns(v[1]), Val(16)))    # 1. Simd Initialization.
+        GC.@preserve vmi begin
+            vmiᵖ = unsafe_convert(Ref{Eltype}, vmi)
+            if rest & 15 >= 8
+                i = _fast_load!(f.f, vmiᵖ, A, i, 9:16)
+            end
+            _anynan(vmiᵖ) && (nan = _picknan(vmiᵖ); return nan, nan)
+        end
+        vma, elm = Ref(vmi[]), Ref(vmi[])
+        v = GC.@preserve vmi vma elm begin       # 2. Simd reduction
+            vmiᵖ = unsafe_convert(Ref{Eltype}, vmi)
+            vmaᵖ = unsafe_convert(Ref{Eltype}, vma)
+            elmᵖ = unsafe_convert(Ref{Eltype}, elm)
+            while i <= last - 16
+                i = _fast_load!(f.f, elmᵖ, A, i, 1:16)
+                _anynan(elmᵖ) && (nan = _picknan(elmᵖ); return nan, nan)
+                _update!(_fast(min), vmiᵖ, elmᵖ)
+                _update!(_fast(max), vmaᵖ, elmᵖ)
+            end
+            _foldl(_fast(min), vmiᵖ), _foldl(_fast(max), vmaᵖ)
+        end
+    end
+    # 3. Reduce the rest elements.
+    @inbounds while i < last
+        v = op(v, f(A[i+=1]))
+    end
+    return v
 end

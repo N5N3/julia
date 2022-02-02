@@ -772,8 +772,11 @@ function read!(s::IO, a::Array{UInt8})
     return a
 end
 
-function read!(s::IO, a::AbstractArray{T}) where T
-    if isbitstype(T) && (a isa Array || a isa FastContiguousSubArray{T,<:Any,<:Array{T}})
+_isdense(a::AbstractArray) = false
+_isdense(a::DenseArray) = true
+_isdense(a::Union{FastContiguousSubArray,ReinterpretArray,ReshapedArray}) = _isdense(parent(a))
+function read!(s::IO, a::AbstractArray{T}) where {T}
+    if isbitstype(T) && _isdense(a)
         GC.@preserve a unsafe_read(s, pointer(a), sizeof(a))
     else
         for i in eachindex(a)
