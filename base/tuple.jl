@@ -529,6 +529,12 @@ function _tuple_any(f::Function, tf::Bool, a, b...)
 end
 _tuple_any(f::Function, tf::Bool) = tf
 
+_ntuple_any(f::Function, ::Val{N}) where {N} = _ntuple_any(f, false, Val(N))
+function _ntuple_any(f::Function, tf::Bool, ::Val{N}) where {N}
+    @inline
+    _ntuple_any(f, tf | f(N), Val(N-1))
+end
+_ntuple_any(f::Function, tf::Bool, ::Val{0}) = tf
 
 # a version of `in` esp. for NamedTuple, to make it pure, and not compiled for each tuple length
 function sym_in(x::Symbol, itr::Tuple{Vararg{Symbol}})

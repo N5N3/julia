@@ -317,6 +317,26 @@ function size(a::ReshapedReinterpretArray{T,N,S} where {N}) where {T,S}
 end
 size(a::NonReshapedReinterpretArray{T,0}) where {T} = ()
 
+# A temporary patch for #44040
+firstindex(a::NonReshapedReinterpretArray, i::Integer) = firstindex(a.parent, i)
+firstindex(a::NonReshapedReinterpretArray{<:Any,1}) = firstindex(a.parent)
+function firstindex(a::ReshapedReinterpretArray{T,N,S} where {N}, i::Integer) where {T,S}
+    sizeof(S) == sizeof(T) && return firstindex(a.parent, i)
+    if i > 0
+        if sizeof(S) > sizeof(T)
+            return i == 1 ? 1 : firstindex(a.parent, i - 1)
+        else
+            return firstindex(a.parent, i + 1)
+        end
+    end
+    first(axes(a, i)) # make sure we throw the correct error message.
+end
+function firstindex(a::ReshapedReinterpretArray{T,1,S}) where {T,S}
+    sizeof(S) > sizeof(T) && return 1
+    sizeof(S) == sizeof(T) && return firstindex(a.parent)
+    return firstindex(a.parent, 2)
+end
+
 function axes(a::NonReshapedReinterpretArray{T,N,S} where {N}) where {T,S}
     paxs = axes(a.parent)
     f, l = first(paxs[1]), length(paxs[1])

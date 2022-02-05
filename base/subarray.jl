@@ -455,3 +455,6 @@ function _indices_sub(i1::AbstractArray, I...)
     @inline
     (axes(i1)..., _indices_sub(I...)...)
 end
+
+# A temporary patch for #44040
+firstindex(S::SubArray, i::Integer) = i <= ndims(S) ? firstindex(S.indices[i]) : 1

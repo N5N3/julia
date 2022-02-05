@@ -1588,3 +1588,12 @@ end
     i = CartesianIndex((1,1))
     @test (@inferred A[i,i,i]) === A[1]
 end
+
+@testset "Issue #44040" begin
+    a = randn(ComplexF64, 10)
+    ta = reinterpret(Float64, a)
+    tb = reinterpret(Float64, view(a, 1:2:10))
+    tc = reinterpret(Float64, reshape(view(a, 1:3:10), 2, 2, 1))
+    @test !(only(only(Base.code_typed(Base.has_offset_axes, Base.typesof(ta,tc))).first.code).val)
+    @test !(only(only(Base.code_typed(Base.has_offset_axes, Base.typesof(ta,tb,tc))).first.code).val)
+end
