@@ -352,7 +352,7 @@ has_offset_axes(a::ReinterpretArray) = has_offset_axes(a.parent)
 elsize(::Type{<:ReinterpretArray{T}}) where {T} = sizeof(T)
 unsafe_convert(::Type{Ptr{T}}, a::ReinterpretArray{T,N,S} where N) where {T,S} = Ptr{T}(unsafe_convert(Ptr{S},a.parent))
 
-@inline @propagate_inbounds function getindex(a::NonReshapedReinterpretArray{T,0,S}) where {T,S}
+@propagate_inbounds function getindex(a::NonReshapedReinterpretArray{T,0,S}) where {T,S}
     if isprimitivetype(T) && isprimitivetype(S)
         reinterpret(T, a.parent[])
     else
@@ -360,15 +360,22 @@ unsafe_convert(::Type{Ptr{T}}, a::ReinterpretArray{T,N,S} where N) where {T,S} =
     end
 end
 
-@inline @propagate_inbounds getindex(a::ReinterpretArray) = a[firstindex(a)]
+check_store(a::StridedReinterpretArray) = check_store(parent(a))
+check_store(a::FastContiguousSubArray) = check_store(parent(a))
+check_store(a::Array) = true
+check_store(a::AbstractArray) = false
 
-@inline @propagate_inbounds function getindex(a::ReinterpretArray{T,N,S}, inds::Vararg{Int, N}) where {T,N,S}
+@propagate_inbounds getindex(a::ReinterpretArray) = a[firstindex(a)]
+
+@propagate_inbounds function getindex(a::ReinterpretArray{T,N,S}, inds::Vararg{Int, N}) where {T,N,S}
     check_readable(a)
+    check_store(a) && return _getindex_ptr(a, inds...)
     _getindex_ra(a, inds[1], tail(inds))
 end
 
-@inline @propagate_inbounds function getindex(a::ReinterpretArray{T,N,S}, i::Int) where {T,N,S}
+@propagate_inbounds function getindex(a::ReinterpretArray{T,N,S}, i::Int) where {T,N,S}
     check_readable(a)
+    check_store(a) && return _getindex_ptr(a, i)
     if isa(IndexStyle(a), IndexLinear)
         return _getindex_ra(a, i, ())
     end
@@ -378,7 +385,7 @@ end
     isempty(inds) ? _getindex_ra(a, 1, ()) : _getindex_ra(a, inds[1], tail(inds))
 end
 
-@inline @propagate_inbounds function getindex(a::ReshapedReinterpretArray{T,N,S}, ind::SCartesianIndex2) where {T,N,S}
+@propagate_inbounds function getindex(a::ReshapedReinterpretArray{T,N,S}, ind::SCartesianIndex2) where {T,N,S}
     check_readable(a)
     s = Ref{S}(a.parent[ind.j])
     GC.@preserve s begin
@@ -389,7 +396,16 @@ end
 
 @inline _memcpy!(dst, src, n) = ccall(:memcpy, Cvoid, (Ptr{UInt8}, Ptr{UInt8}, Csize_t), dst, src, n)
 
-@inline @propagate_inbounds function _getindex_ra(a::NonReshapedReinterpretArray{T,N,S}, i1::Int, tailinds::TT) where {T,N,S,TT}
+@inline function _getindex_ptr(a::ReinterpretArray{T}, inds...) where {T}
+    @boundscheck checkbounds(a, inds...)
+    li = _to_linear_index(a, inds...)
+    GC.@preserve a begin
+        p = pointer(a) + sizeof(T) * (li - 1)
+        return unsafe_load(p)
+    end
+end
+
+@propagate_inbounds function _getindex_ra(a::NonReshapedReinterpretArray{T,N,S}, i1::Int, tailinds::TT) where {T,N,S,TT}
     # Make sure to match the scalar reinterpret if that is applicable
     if sizeof(T) == sizeof(S) && (fieldcount(T) + fieldcount(S)) == 0
         if issingletontype(T) # singleton types
@@ -445,7 +461,7 @@ end
     end
 end
 
-@inline @propagate_inbounds function _getindex_ra(a::ReshapedReinterpretArray{T,N,S}, i1::Int, tailinds::TT) where {T,N,S,TT}
+@propagate_inbounds function _getindex_ra(a::ReshapedReinterpretArray{T,N,S}, i1::Int, tailinds::TT) where {T,N,S,TT}
     # Make sure to match the scalar reinterpret if that is applicable
     if sizeof(T) == sizeof(S) && (fieldcount(T) + fieldcount(S)) == 0
         if issingletontype(T) # singleton types
@@ -492,7 +508,7 @@ end
     end
 end
 
-@inline @propagate_inbounds function setindex!(a::NonReshapedReinterpretArray{T,0,S}, v) where {T,S}
+@propagate_inbounds function setindex!(a::NonReshapedReinterpretArray{T,0,S}, v) where {T,S}
     if isprimitivetype(S) && isprimitivetype(T)
         a.parent[] = reinterpret(S, v)
         return a
@@ -500,15 +516,17 @@ end
     setindex!(a, v, firstindex(a))
 end
 
-@inline @propagate_inbounds setindex!(a::ReinterpretArray, v) = setindex!(a, v, firstindex(a))
+@propagate_inbounds setindex!(a::ReinterpretArray, v) = setindex!(a, v, firstindex(a))
 
-@inline @propagate_inbounds function setindex!(a::ReinterpretArray{T,N,S}, v, inds::Vararg{Int, N}) where {T,N,S}
+@propagate_inbounds function setindex!(a::ReinterpretArray{T,N,S}, v, inds::Vararg{Int, N}) where {T,N,S}
     check_writable(a)
+    check_store(a) && return _setindex_ptr!(a, v, inds...)
     _setindex_ra!(a, v, inds[1], tail(inds))
 end
 
-@inline @propagate_inbounds function setindex!(a::ReinterpretArray{T,N,S}, v, i::Int) where {T,N,S}
+@propagate_inbounds function setindex!(a::ReinterpretArray{T,N,S}, v, i::Int) where {T,N,S}
     check_writable(a)
+    check_store(a) && return _setindex_ptr!(a, v, i)
     if isa(IndexStyle(a), IndexLinear)
         return _setindex_ra!(a, v, i, ())
     end
@@ -516,7 +534,7 @@ end
     _setindex_ra!(a, v, inds[1], tail(inds))
 end
 
-@inline @propagate_inbounds function setindex!(a::ReshapedReinterpretArray{T,N,S}, v, ind::SCartesianIndex2) where {T,N,S}
+@propagate_inbounds function setindex!(a::ReshapedReinterpretArray{T,N,S}, v, ind::SCartesianIndex2) where {T,N,S}
     check_writable(a)
     v = convert(T, v)::T
     s = Ref{S}(a.parent[ind.j])
@@ -528,7 +546,17 @@ end
     return a
 end
 
-@inline @propagate_inbounds function _setindex_ra!(a::NonReshapedReinterpretArray{T,N,S}, v, i1::Int, tailinds::TT) where {T,N,S,TT}
+@inline function _setindex_ptr!(a::ReinterpretArray{T}, v, inds...) where {T}
+    @boundscheck checkbounds(a, inds...)
+    li = _to_linear_index(a, inds...)
+    GC.@preserve a begin
+        p = pointer(a) + sizeof(T) * (li - 1)
+        unsafe_store!(p, v)
+    end
+    return a
+end
+
+@propagate_inbounds function _setindex_ra!(a::NonReshapedReinterpretArray{T,N,S}, v, i1::Int, tailinds::TT) where {T,N,S,TT}
     v = convert(T, v)::T
     # Make sure to match the scalar reinterpret if that is applicable
     if sizeof(T) == sizeof(S) && (fieldcount(T) + fieldcount(S)) == 0
@@ -601,7 +629,7 @@ end
     return a
 end
 
-@inline @propagate_inbounds function _setindex_ra!(a::ReshapedReinterpretArray{T,N,S}, v, i1::Int, tailinds::TT) where {T,N,S,TT}
+@propagate_inbounds function _setindex_ra!(a::ReshapedReinterpretArray{T,N,S}, v, i1::Int, tailinds::TT) where {T,N,S,TT}
     v = convert(T, v)::T
     # Make sure to match the scalar reinterpret if that is applicable
     if sizeof(T) == sizeof(S) && (fieldcount(T) + fieldcount(S)) == 0
