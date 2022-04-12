@@ -607,6 +607,18 @@ function index_elements(iter)
     return vals
 end
 
+@testset "CartesianTake optimizations" for dims in ((1,), (64,), (101,),
+                                                         (1,1), (8,8), (11, 13),
+                                                         (1,1,1), (8, 4, 2), (11, 13, 17)),
+                                                part in (1, 7, 8, 11, 63, 64, 65, 142, 143, 144)
+    for fun in (i -> 1:i, i -> 1:2:2i, i -> Base.IdentityUnitRange(-i:i))
+        iter = CartesianIndices(map(fun, dims))
+        I = Iterators.take(iter, part)
+        @test collect(I) == iterate_elements(I) == simd_iterate_elements(I) == collect(iter)[1:min(part,length(iter))]
+        @test length(I) == iterate_length(I) == simd_iterate_length(I) == simd_trip_count(I)
+    end
+end
+
 @testset "CartesianPartition optimizations" for dims in ((1,), (64,), (101,),
                                                          (1,1), (8,8), (11, 13),
                                                          (1,1,1), (8, 4, 2), (11, 13, 17)),

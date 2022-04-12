@@ -658,6 +658,41 @@ module IteratorsMD
     @inline simd_inner_length(iter::CartesianPartition, (_, len, _)::Tuple{Int,Int,CartesianIndex}) = len
     @propagate_inbounds simd_index(iter::CartesianPartition, (skip, _, I)::Tuple{Int,Int,CartesianIndex}, n::Int) =
         simd_index(iter.parent.parent, I, n + skip)
+
+    # CartesianPartition has arbitrary start/end. But sometimes we only need to change the end point.
+    @inline Iterators.take(iter::CartesianIndices{0}, n::Int) = @inbounds view(iter, 1:min(1, n))
+    @inline Iterators.take(iter::CartesianIndices{1}, n::Int) = @inbounds iter[begin:min(end, begin + n - 1)]
+    const CartesianTake{N} = Iterators.Take{<:CartesianIndices{N}}
+    @inline function iterate(iter::CartesianTake)
+        isempty(iter.xs) && return nothing
+        I = first(iter.xs)
+        I, (I, 1)
+    end
+    @inline function iterate(iter::CartesianTake, (state, n)::Tuple{CartesianIndex,Int})
+        n >= length(iter) && return nothing
+        I = inc(state.I, iter.xs.indices)
+        I, (I, n + 1)
+    end
+
+    @inline function simd_outer_range(iter::CartesianTake)
+        dim1, dims = split(iter.xs, Val(1))
+        d, r = divrem(length(iter), length(dim1), RoundUp)
+        out = Iterators.take(dims, d)
+        return Iterators.map(enumerate(out)) do (i, I)
+            (i >= length(out)) * r + length(dim1), I
+        end
+    end
+    @inline function simd_outer_range(iter::CartesianTake{2})
+        dim1, dims = split(iter.xs, Val(1))
+        d, r = divrem(length(iter), length(dim1), RoundUp)
+        out = Iterators.take(dims, d)
+        return Iterators.map(out) do I
+            (I == last(out)) * r + length(dim1), I
+        end
+    end
+    @inline simd_inner_length(iter::CartesianTake, (len, _)::Tuple{Integer,CartesianIndex}) = len
+    @propagate_inbounds simd_index(iter::CartesianTake, (_, I)::Tuple{Integer,CartesianIndex}, n::Int) =
+        simd_index(iter.xs, I, n)
 end  # IteratorsMD
 
 
@@ -1896,3 +1931,81 @@ end
 
 getindex(b::Ref, ::CartesianIndex{0}) = getindex(b)
 setindex!(b::Ref, x, ::CartesianIndex{0}) = setindex!(b, x)
+
+# Optimizations for copyto_unaliased
+function copyto_unaliased!(::IndexLinear, dest::AbstractArray, ::IndexLinear, src::AbstractArray)
+    isempty(src) && return dest
+    length(dest) < length(src) && throw(BoundsError(dest, LinearIndices(src)))
+    Δi = firstindex(dest) - firstindex(src)
+    for i in eachindex(IndexLinear(), src)
+        @inbounds dest[i+Δi] = src[i]
+    end
+    return dest
+end
+
+# A help macro to avoid repeated code
+macro trysimd(x)
+    return esc(quote
+        if Base._worth_simd($(x.args[1].args[2]))
+            @simd $(x)
+        else
+            $(x)
+        end
+        nothing
+    end)
+end
+# `@simd` is faster only when dim1 is long enough.
+# We use `_worth_simd` to do the check.
+@inline _worth_simd(iter::CartesianIndices) = ndims(iter) > 2 && size(iter, 1) >= 16
+@inline _worth_simd(iter::IteratorsMD.CartesianPartition) = size(iter.parent.parent, 1) >= 16
+@inline _worth_simd(iter::IteratorsMD.CartesianTake) = size(iter.xs, 1) >= 16
+_worth_simd(iter) = true
+
+function copyto_unaliased!(::IndexLinear, dest::AbstractArray, ::IndexCartesian, src::AbstractArray)
+    isempty(src) && return dest
+    length(dest) < length(src) && throw(BoundsError(dest, LinearIndices(src)))
+    j = firstindex(dest) - 1
+    @inbounds @trysimd for I in CartesianIndices(src)
+        dest[j+=1] = src[I]
+    end
+    dest
+end
+
+function copyto_unaliased!(::IndexCartesian, dest::AbstractArray, ::IndexLinear, src::AbstractArray)
+    isempty(src) && return dest
+    length(dest) < length(src) && throw(BoundsError(dest, LinearIndices(src)))
+    i = firstindex(src) - 1
+    iter = CartesianIndices(dest)
+    @inbounds if ndims(dest) > 1 && length(dest) == length(src)
+        # We can use `iter` safely if `dest` and `src` have the same length.
+        # But such optimization is not needed for vector cases.
+        @trysimd for J in iter
+            dest[J] = src[i+=1]
+        end
+    else
+        @trysimd for J in Iterators.take(iter, length(src))
+            dest[J] = src[i+=1]
+        end
+    end
+    dest
+end
+
+function copyto_unaliased!(::IndexCartesian, dest::AbstractArray, ::IndexCartesian, src::AbstractArray)
+    # We have zip-based branch here, try our best not to hit it.
+    ndims(dest) == 1 && return copyto_unaliased!(IndexLinear(), dest, IndexCartesian(), src)
+    ndims(src) == 1 && return copyto_unaliased!(IndexCartesian(), dest, IndexLinear(), src)
+    isempty(src) && return dest
+    length(dest) < length(src) && throw(BoundsError(dest, LinearIndices(src)))
+    iterdest, itersrc = CartesianIndices(dest), CartesianIndices(src)
+    @inbounds if size(iterdest) == size(itersrc) # shared iterator
+        ΔI = first(iterdest) - first(itersrc)
+        @trysimd for I in itersrc
+            dest[I + ΔI] = src[I]
+        end
+    else                             # zip-based branch
+        for (J, I) in zip(iterdest, itersrc)
+            dest[J] = src[I]
+        end
+    end
+    dest
+end
