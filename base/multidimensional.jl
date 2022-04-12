@@ -488,8 +488,10 @@ module IteratorsMD
     simd_inner_length(iter::CartesianIndices, I::CartesianIndex) = Base.length(iter.indices[1])
 
     simd_index(iter::CartesianIndices{0}, ::CartesianIndex, I1::Int) = first(iter)
-    @propagate_inbounds simd_index(iter::CartesianIndices, Ilast::CartesianIndex, I1::Int) =
-        CartesianIndex(iter.indices[1][I1+firstindex(iter.indices[1])], Ilast)
+    @inline function simd_index(iter::CartesianIndices, Ilast::CartesianIndex, I1::Int)
+        indices1 = iter.indices[1]
+        CartesianIndex(first(indices1) + step(indices1) * I1, Ilast)
+    end
 
     # Split out the first N elements of a tuple
     @inline function split(t, V::Val)
@@ -678,8 +680,41 @@ module IteratorsMD
         (skip_len_I(I) for I in outer)
     end
     @inline simd_inner_length(iter::CartesianPartition, (_, len, _)::Tuple{Int,Int,CartesianIndex}) = len
-    @propagate_inbounds simd_index(iter::CartesianPartition, (skip, _, I)::Tuple{Int,Int,CartesianIndex}, n::Int) =
+    @inline simd_index(iter::CartesianPartition, (skip, _, I)::Tuple{Int,Int,CartesianIndex}, n::Int) =
         simd_index(iter.parent.parent, I, n + skip)
+
+    # CartesianPartition has arbitrary start&end. But sometimes we only need to change one side.
+    CartesianTake{N} = Iterators.Take{<:CartesianIndices{N}}
+    CartesianDrop{N} = Iterators.Drop{<:CartesianIndices{N}}
+
+    @inline function simd_outer_range(iter::CartesianTake)
+        (;xs, n) = iter
+        dim1, dims = split(xs, Val(1))
+        ldim1 = length(dim1)
+        outer = zip(dims, Iterators.countfrom(ldim1 > 0 ? n : 0, -ldim1))
+        outer′ = Iterators.takewhile(>(0)∘last, outer)
+        Iterators.map(outer′) do (I, n)
+            min(n, ldim1), I
+        end
+    end
+    @inline simd_inner_length(iter::CartesianTake, (len, _)::Tuple{Integer,CartesianIndex}) = len
+    @inline simd_index(iter::CartesianTake, (_, I)::Tuple{Integer,CartesianIndex}, n::Int) =
+        simd_index(iter.xs, I, n)
+
+    @inline function simd_outer_range(iter::CartesianDrop)
+        (;xs, n) = iter
+        dim1, dims = split(xs, Val(1))
+        ldim1 = length(dim1)
+        outer = zip(dims, Iterators.countfrom(n, -ldim1))
+        outer′ = Iterators.dropwhile(>=(ldim1)∘last, outer)
+        Iterators.map(outer′) do (I, n)
+            skip = max(n, 0)
+            ldim1 - skip, skip, I
+        end
+    end
+    @inline simd_inner_length(iter::CartesianDrop, (len, _, _)::Tuple{Integer,Integer,CartesianIndex}) = len
+    @inline simd_index(iter::CartesianDrop, (_, skip, I)::Tuple{Integer,Integer,CartesianIndex}, n::Int) =
+        simd_index(iter.xs, I, n + skip)
 end  # IteratorsMD
 
 
@@ -1971,3 +2006,47 @@ end
 
 getindex(b::Ref, ::CartesianIndex{0}) = getindex(b)
 setindex!(b::Ref, x, ::CartesianIndex{0}) = setindex!(b, x)
+
+# Optimizations for copyto_unaliased
+@inline function _copyto_unaliased!(::IndexLinear, dest, ::IndexCartesian, src)
+    ndims(src) == 1 &&
+        return _copyto_unaliased!(IndexLinear(), dest, IndexLinear(), src)
+    j = firstindex(dest) - 1
+    @inbounds @simd for I in CartesianIndices(src)
+        dest[j+=1] = src[I]
+    end
+    dest
+end
+
+@inline function _copyto_unaliased!(::IndexCartesian, dest, ::IndexLinear, src)
+    ndims(dest) == 1 &&
+        return _copyto_unaliased!(IndexLinear(), dest, IndexLinear(), src)
+    i = firstindex(src) - 1
+    iter = CartesianIndices(dest)
+    @inbounds @simd for J in Iterators.take(iter, length(src))
+        dest[J] = src[i+=1]
+    end
+    dest
+end
+
+@inline function _copyto_unaliased!(::IndexCartesian, dest, ::IndexCartesian, src)
+    ndims(dest) == 1 &&
+        return _copyto_unaliased!(IndexLinear(), dest, IndexCartesian(), src)
+    ndims(src) == 1 &&
+        return _copyto_unaliased!(IndexCartesian(), dest, IndexLinear(), src)
+    iterdest, itersrc = CartesianIndices(dest), CartesianIndices(src)
+    if size(iterdest) == size(itersrc) # shared iterator
+        ΔI = first(iterdest) - first(itersrc)
+        @inbounds @simd for I in itersrc
+            dest[I + ΔI] = src[I]
+        end
+    else
+        Js = _prechecked_iterate(iterdest)
+        @inbounds for I in itersrc
+            J, state = Js::NTuple{2,Any}
+            dest[J] = src[I]
+            Js = _prechecked_iterate(iterdest, state)
+        end
+    end
+    dest
+end

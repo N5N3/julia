@@ -1074,40 +1074,35 @@ end
 
 function copyto_unaliased!(deststyle::IndexStyle, dest::AbstractArray, srcstyle::IndexStyle, src::AbstractArray)
     isempty(src) && return dest
-    destinds, srcinds = LinearIndices(dest), LinearIndices(src)
-    idf, isf = first(destinds), first(srcinds)
-    Δi = idf - isf
-    (checkbounds(Bool, destinds, isf+Δi) & checkbounds(Bool, destinds, last(srcinds)+Δi)) ||
-        throw(BoundsError(dest, srcinds))
-    if deststyle isa IndexLinear
-        if srcstyle isa IndexLinear
-            # Single-index implementation
-            @inbounds for i in srcinds
-                dest[i + Δi] = src[i]
-            end
-        else
-            # Dual-index implementation
-            i = idf - 1
-            @inbounds for a in src
-                dest[i+=1] = a
-            end
+    length(dest) < length(src) && throw(BoundsError(dest, LinearIndices(src)))
+    return _copyto_unaliased!(deststyle, dest, srcstyle, src)
+end
+
+function _copyto_unaliased!(deststyle::IndexStyle, dest, srcstyle::IndexStyle, src)
+    @inline
+    iterdest, itersrc = eachindex(deststyle, dest), eachindex(srcstyle, src)
+    if iterdest == itersrc
+        # Shared-iterator implementation
+        @inbounds for I in iterdest
+            dest[I] = src[I]
         end
     else
-        iterdest, itersrc = eachindex(dest), eachindex(src)
-        if iterdest == itersrc
-            # Shared-iterator implementation
-            for I in iterdest
-                @inbounds dest[I] = src[I]
-            end
-        else
-            # Dual-iterator implementation
-            ret = iterate(iterdest)
-            @inbounds for a in src
-                idx, state = ret::NTuple{2,Any}
-                dest[idx] = a
-                ret = iterate(iterdest, state)
-            end
+        # Dual-iterator implementation
+        ret = _prechecked_iterate(iterdest)
+        @inbounds for a in itersrc
+            idx, state = ret::NTuple{2,Any}
+            dest[idx] = src[a]
+            ret = _prechecked_iterate(iterdest, state)
         end
+    end
+    return dest
+end
+
+function _copyto_unaliased!(::IndexLinear, dest, ::IndexLinear, src)
+    @inline
+    Δi = firstindex(dest) - firstindex(src)
+    @inbounds for i in eachindex(IndexLinear(), src)
+        dest[i+Δi] = src[i]
     end
     return dest
 end

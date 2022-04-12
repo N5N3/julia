@@ -597,7 +597,8 @@ function simd_iterate_length(iter)
     return n
 end
 function simd_trip_count(iter)
-    return sum(Base.SimdLoop.simd_inner_length(iter, i) for i in Base.SimdLoop.simd_outer_range(iter))
+    f = Base.Fix1(Base.SimdLoop.simd_inner_length, iter)
+    return sum(f, Base.SimdLoop.simd_outer_range(iter), init = 0)
 end
 function iterate_elements(iter)
     vals = Vector{eltype(iter)}(undef, length(iter))
@@ -625,6 +626,21 @@ function index_elements(iter)
         i += 1
     end
     return vals
+end
+
+@testset "CartesianTake/Drop optimizations" for dims in ((), (0,), (1,), (64,), (101,),
+                                                         (1, 1), (8, 8), (11, 13), (0, 10),
+                                                         (1, 1, 1), (8, 4, 2), (11, 13, 17), (0, 2, 2)),
+                                                part in (0, 1, 7, 8, 11, 63, 64, 65, 142, 143, 144)
+    for fun in (i -> 1:i, i -> 1:2:2i, i -> Base.IdentityUnitRange(-i:i))
+        iter = CartesianIndices(map(fun, dims))
+        I = Iterators.take(iter, part)
+        @test collect(I) == iterate_elements(I) == simd_iterate_elements(I) == collect(iter)[1:min(part,end)]
+        @test length(I) == iterate_length(I) == simd_iterate_length(I) == simd_trip_count(I)
+        I = Iterators.drop(iter, part)
+        @test collect(I) == iterate_elements(I) == simd_iterate_elements(I) == collect(iter)[part+1:end]
+        @test length(I) == iterate_length(I) == simd_iterate_length(I) == simd_trip_count(I)
+    end
 end
 
 @testset "CartesianPartition optimizations" for dims in ((1,), (64,), (101,),
