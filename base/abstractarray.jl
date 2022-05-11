@@ -1215,6 +1215,7 @@ zero(x::AbstractArray{T}) where {T} = fill!(similar(x, typeof(zero(T))), zero(T)
 # own, IndexCartesian's CartesianIndices is more complicated and requires explicit
 # inlining.
 function iterate(A::AbstractArray, state=(eachindex(A),))
+    @_propagate_inbounds_meta
     y = iterate(state...)
     y === nothing && return nothing
     A[y[1]], (state[1], tail(y)...)

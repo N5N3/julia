@@ -621,21 +621,22 @@ module IteratorsMD
         # CartesianPartition.
         mi = iter.parent.mi
         ci = iter.parent.parent
-        ax, ax1 = axes(ci), Base.axes1(ci)
-        subs = Base.ind2sub_rs(ax, mi, first(iter.indices[1]))
-        vl, fl = Base._sub2ind(tail(ax), tail(subs)...), subs[1]
-        vr, fr = divrem(last(iter.indices[1]) - 1, mi[end]) .+ (1, first(ax1))
+        ax1 = Base.axes1(ci)
+        d, r = divrem(first(iter.indices[1]) - 1, mi[1])
+        vl, fl = d + 1, r + first(ax1)
+        d, r = divrem(last(iter.indices[1]) - 1, mi[1])
+        vr, fr = d + 1, r + first(ax1)
+        # form the iterator for outer dimensions, equivalent to vec(oci), but mi is reused
         oci = CartesianIndices(tail(ci.indices))
-        # A fake CartesianPartition to reuse the outer iterate fallback
-        outer = @inbounds view(ReshapedArray(oci, (length(oci),), mi), vl:vr)
-        init = @inbounds dec(oci[tail(subs)...].I, oci.indices) # real init state
+        roci = ReshapedArray(oci, (length(oci),), tail(mi))
+        outer = @inbounds view(roci, vl:vr)
         # Use Generator to make inner loop branchless
-        @inline function skip_len_I(i::Int, I::CartesianIndex)
+        return Iterators.map(enumerate(outer)) do (i, I)
+            @inline
             l = i == 1 ? fl : first(ax1)
             r = i == length(outer) ? fr : last(ax1)
             l - first(ax1), r - l + 1, I
         end
-        (skip_len_I(i, I) for (i, I) in Iterators.enumerate(Iterators.rest(outer, (init, 0))))
     end
     @inline function simd_outer_range(iter::CartesianPartition{CartesianIndex{2}})
         # But for two-dimensional Partitions the above is just a simple one-dimensional range
@@ -648,12 +649,12 @@ module IteratorsMD
         fr, vr = Base.ind2sub_rs(ax, mi, last(iter.indices[1]))
         outer = @inbounds CartesianIndices((ci.indices[2][vl:vr],))
         # Use Generator to make inner loop branchless
-        @inline function skip_len_I(I::CartesianIndex{1})
+        return Iterators.map(outer) do I
+            @inline
             l = I == first(outer) ? fl : first(ax1)
             r = I == last(outer) ? fr : last(ax1)
             l - first(ax1), r - l + 1, I
         end
-        (skip_len_I(I) for I in outer)
     end
     @inline simd_inner_length(iter::CartesianPartition, (_, len, _)::Tuple{Int,Int,CartesianIndex}) = len
     @propagate_inbounds simd_index(iter::CartesianPartition, (skip, _, I)::Tuple{Int,Int,CartesianIndex}, n::Int) =
@@ -930,14 +931,23 @@ function _generate_unsafe_getindex!_body(N::Int)
     quote
         @inline
         D = eachindex(dest)
-        Dy = iterate(D)
-        @inbounds @nloops $N j d->I[d] begin
-            # This condition is never hit, but at the moment
-            # the optimizer is not clever enough to split the union without it
-            Dy === nothing && return dest
-            (idx, state) = Dy
-            dest[idx] = @ncall $N getindex src j
-            Dy = iterate(D, state)
+        if D isa AbstractUnitRange
+            # Optimization for linear dest.
+            idx = first(D)
+            @inbounds @nloops $N j d->I[d] begin
+                dest[idx] = @ncall $N getindex src j
+                idx += 1
+            end
+        else
+            Dy = iterate(D)
+            @inbounds @nloops $N j d->I[d] begin
+                # This condition is never hit, but at the moment
+                # the optimizer is not clever enough to split the union without it
+                Dy === nothing && return dest
+                (idx, state) = Dy
+                dest[idx] = @ncall $N getindex src j
+                Dy = iterate(D, state)
+            end
         end
         return dest
     end
@@ -973,16 +983,26 @@ function _generate_unsafe_setindex!_body(N::Int)
         @nexprs $N d->(I_d = unalias(A, I[d]))
         idxlens = @ncall $N index_lengths I
         @ncall $N setindex_shape_check x′ (d->idxlens[d])
-        Xy = iterate(x′)
-        @inbounds @nloops $N i d->I_d begin
-            # This is never reached, but serves as an assumption for
-            # the optimizer that it does not need to emit error paths
-            Xy === nothing && break
-            (val, state) = Xy
-            @ncall $N setindex! A val i
-            Xy = iterate(x′, state)
+        S = eachindex(x′)
+        if S isa AbstractUnitRange
+            # Optimization for linear src.
+            idx = first(S)
+            @inbounds @nloops $N i d->I_d begin
+                @ncall $N setindex! A x′[idx] i
+                idx += 1
+            end
+        else
+            Sy = iterate(S)
+            @inbounds @nloops $N i d->I_d begin
+                # This is never reached, but serves as an assumption for
+                # the optimizer that it does not need to emit error paths
+                Sy === nothing && return A
+                (idx, state) = Sy
+                @ncall $N setindex! A x′[idx] i
+                Sy = iterate(S, state)
+            end
         end
-        A
+        return A
     end
 end
 

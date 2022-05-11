@@ -1720,7 +1720,14 @@ module IRUtils
     include("compiler/irutils.jl")
 end
 
+struct FakeZeroDimArray <: AbstractArray{Int, 0} end
+Base.strides(::FakeZeroDimArray) = ()
+Base.size(::FakeZeroDimArray) = ()
 @testset "strides for ReshapedArray" begin
+    # Type-based contiguous Check
+    a = vec(reinterpret(reshape, Int16, reshape(view(reinterpret(Int32, randn(10)), 2:11), 5, :)))
+    f(a) = only(strides(a));
+    @test IRUtils.fully_eliminated(f, Base.typesof(a)) && f(a) == 1
     function check_strides(A::AbstractArray)
         # Make sure stride(A, i) is equivalent with strides(A)[i] (if 1 <= i <= ndims(A))
         dims = ntuple(identity, ndims(A))
