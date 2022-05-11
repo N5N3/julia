@@ -1224,6 +1224,7 @@ oneunit(x::AbstractMatrix{T}) where {T} = _one(oneunit(T), x)
 # own, IndexCartesian's CartesianIndices is more complicated and requires explicit
 # inlining.
 function iterate(A::AbstractArray, state=(eachindex(A),))
+    @_propagate_inbounds_meta
     y = iterate(state...)
     y === nothing && return nothing
     A[y[1]], (state[1], tail(y)...)

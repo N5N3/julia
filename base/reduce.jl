@@ -306,7 +306,6 @@ pairwise_blocksize(f, op) = 1024
 # This combination appears to show a benefit from a larger block size
 pairwise_blocksize(::typeof(abs2), ::typeof(+)) = 4096
 
-
 # handling empty arrays
 _empty_reduce_error() = throw(ArgumentError("reducing over an empty collection is not allowed; consider supplying `init` to the reducer"))
 reduce_empty(f, T) = _empty_reduce_error()
@@ -440,6 +439,9 @@ end
 mapreduce(f, op, a::Number) = mapreduce_first(f, op, a)
 
 _mapreduce(f, op, ::IndexCartesian, A::AbstractArrayOrBroadcasted) = mapfoldl(f, op, A)
+
+@inline _mapreduce(f, op, ::IndexCartesian, A::AbstractVector) =
+    _mapreduce(f, op, IndexLinear(), A)
 
 """
     reduce(op, itr; [init])
@@ -609,63 +611,6 @@ julia> prod(1:5; init = 1.0)
 prod(a; kw...) = mapreduce(identity, mul_prod, a; kw...)
 
 ## maximum, minimum, & extrema
-_fast(::typeof(min),x,y) = min(x,y)
-_fast(::typeof(max),x,y) = max(x,y)
-function _fast(::typeof(max), x::AbstractFloat, y::AbstractFloat)
-    ifelse(isnan(x),
-        x,
-        ifelse(x > y, x, y))
-end
-
-function _fast(::typeof(min),x::AbstractFloat, y::AbstractFloat)
-    ifelse(isnan(x),
-        x,
-        ifelse(x < y, x, y))
-end
-
-isbadzero(::typeof(max), x::AbstractFloat) = (x == zero(x)) & signbit(x)
-isbadzero(::typeof(min), x::AbstractFloat) = (x == zero(x)) & !signbit(x)
-isbadzero(op, x) = false
-isgoodzero(::typeof(max), x) = isbadzero(min, x)
-isgoodzero(::typeof(min), x) = isbadzero(max, x)
-
-function mapreduce_impl(f, op::Union{typeof(max), typeof(min)},
-                        A::AbstractArrayOrBroadcasted, first::Int, last::Int)
-    a1 = @inbounds A[first]
-    v1 = mapreduce_first(f, op, a1)
-    v2 = v3 = v4 = v1
-    chunk_len = 256
-    start = first + 1
-    simdstop  = start + chunk_len - 4
-    while simdstop <= last - 3
-        for i in start:4:simdstop
-            v1 = _fast(op, v1, f(@inbounds(A[i+0])))
-            v2 = _fast(op, v2, f(@inbounds(A[i+1])))
-            v3 = _fast(op, v3, f(@inbounds(A[i+2])))
-            v4 = _fast(op, v4, f(@inbounds(A[i+3])))
-        end
-        checkbounds(A, simdstop+3)
-        start += chunk_len
-        simdstop += chunk_len
-    end
-    v = op(op(v1,v2),op(v3,v4))
-    for i in start:last
-        @inbounds ai = A[i]
-        v = op(v, f(ai))
-    end
-
-    # enforce correct order of 0.0 and -0.0
-    # e.g. maximum([0.0, -0.0]) === 0.0
-    # should hold
-    if isbadzero(op, v)
-        for i in first:last
-            x = @inbounds A[i]
-            isgoodzero(op,x) && return x
-        end
-    end
-    return v
-end
-
 """
     maximum(f, itr; [init])
 
@@ -1383,3 +1328,8 @@ function _simple_count(::typeof(identity), x::Array{Bool}, init::T=0) where {T}
     end
     return n
 end
+
+# The following operations prefer non-pairwise reduction.
+pairwise_blocksize(_, ::Union{typeof(min),typeof(max)}) = typemax(Int)
+pairwise_blocksize(_, ::Union{typeof(|),typeof(&)}) = typemax(Int)
+pairwise_blocksize(::ExtremaMap, ::typeof(_extrema_rf)) = typemax(Int)

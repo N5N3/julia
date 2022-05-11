@@ -302,6 +302,15 @@ _mapreduce(f, op, ::IndexCartesian, itr::SkipMissing) = mapfoldl(f, op, itr)
 mapreduce_impl(f, op, A::SkipMissing, ifirst::Integer, ilast::Integer) =
     mapreduce_impl(f, op, A, ifirst, ilast, pairwise_blocksize(f, op))
 
+# Some help function to make LLVM better vectorizing these reduction.
+# It returns a `noop`, which make sure `op(v, noop) === v`
+_fast_noop(::Union{typeof(add_sum),typeof(+)}, v::Union{HWReal,Complex{<:HWReal}}) = zero(v)
+_fast_noop(::Union{typeof(mul_prod),typeof(*)}, v::HWReal) = one(v)
+# TODO: min/max for IEEEFloat need manually unroll to vectorize.
+_fast_noop(::Union{typeof(min),typeof(max)}, v::Integer) = v isa HWReal ? v : nothing
+# General fallback
+_fast_noop(f, v) = nothing
+
 # Returns nothing when the input contains only missing values, and Some(x) otherwise
 @noinline function mapreduce_impl(f, op, itr::SkipMissing{<:AbstractArray},
                                   ifirst::Integer, ilast::Integer, blksize::Int)
@@ -337,10 +346,18 @@ mapreduce_impl(f, op, A::SkipMissing, ifirst::Integer, ilast::Integer) =
         i == typemax(typeof(i)) && return Some(op(f(a1), f(a2)))
         i += 1
         v = op(f(a1), f(a2))
-        @simd for i = i:ilast
-            @inbounds ai = A[i]
-            if !ismissing(ai)
-                v = op(v, f(ai))
+        noop = _fast_noop(op, v)
+        if isnothing(noop)
+            @simd for i = i:ilast
+                @inbounds ai = A[i]
+                if !ismissing(ai)
+                    v = op(v, f(ai))
+                end
+            end
+        else
+            @simd for i = i:ilast
+                 @inbounds ai = A[i]
+                 v = op(v, ismissing(ai) ? oftype(v, noop) : f(ai))
             end
         end
         return Some(v)

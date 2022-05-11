@@ -69,7 +69,7 @@ similar(V::SubArray, T::Type, dims::Dims) = similar(V.parent, T, dims)
 sizeof(V::SubArray) = length(V) * sizeof(eltype(V))
 sizeof(V::SubArray{<:Any,<:Any,<:Array}) = length(V) * elsize(V.parent)
 
-function Base.copy(V::SubArray)
+function copy(V::SubArray)
     v = V.parent[V.indices...]
     ndims(V) == 0 || return v
     x = similar(V) # ensure proper type of x
@@ -517,3 +517,10 @@ end
 
 # XXX: this is considerably more unsafe than the other similarly named methods
 unsafe_wrap(::Type{Vector{UInt8}}, s::FastContiguousSubArray{UInt8,1,Vector{UInt8}}) = unsafe_wrap(Vector{UInt8}, pointer(s), size(s))
+
+copyto!(x::Array{T}, y::FastContiguousSubArray{T,<:Any,<:Array{T}}) where {T} =
+    copyto!(x, 1, parent(y), 1+y.offset1, length(y))
+copyto!(x::FastContiguousSubArray{T,<:Any,<:Array{T}}, y::Array{T}) where {T} =
+    copyto!(parent(x), 1+x.offset1, y, 1, length(y))
+copyto!(x::FastContiguousSubArray{T,<:Any,<:Array{T}}, y::FastContiguousSubArray{T,<:Any,<:Array{T}}) where {T} =
+    copyto!(parent(x), 1+x.offset1, parent(y), 1+y.offset1, length(y))
