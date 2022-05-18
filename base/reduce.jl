@@ -45,11 +45,12 @@ end
 function _foldl_impl(op::OP, init, itr) where {OP}
     # Unroll the while loop once; if init is known, the call to op may
     # be evaluated at compile time
-    y = iterate(itr)
+    y = @inbounds iterate(itr)
     y === nothing && return init
     v = op(init, y[1])
     while true
-        y = iterate(itr, y[2])
+        s = y[2]
+        y = @inbounds iterate(itr, s)
         y === nothing && break
         v = op(v, y[1])
     end
@@ -72,6 +73,7 @@ passed to `foldl`-like functions for handling the initial invocation to call
 """
 struct BottomRF{T}
     rf::T
+    BottomRF(@nospecialize(rf)) = new{TypeofValid(rf)}(rf)
 end
 
 @inline (op::BottomRF)(::_InitialValue, x) = reduce_first(op.rf, x)
@@ -85,8 +87,7 @@ Create a mapping reducing function `rf′(acc, x) = rf(acc, f(x))`.
 struct MappingRF{F, T}
     f::F
     rf::T
-    MappingRF(f::F, rf::T) where {F,T} = new{F,T}(f, rf)
-    MappingRF(::Type{f}, rf::T) where {f,T} = new{Type{f},T}(f, rf)
+    MappingRF(@nospecialize(f), @nospecialize(rf)) = new{TypeofValid(f),TypeofValid(rf)}(f, rf)
 end
 
 @inline (op::MappingRF)(acc, x) = op.rf(acc, op.f(x))
@@ -99,6 +100,7 @@ Create a filtering reducing function `rf′(acc, x) = f(x) ? rf(acc, x) : acc`.
 struct FilteringRF{F, T}
     f::F
     rf::T
+    FilteringRF(@nospecialize(f), @nospecialize(rf)) = new{TypeofValid(f),TypeofValid(rf)}(f, rf)
 end
 
 @inline (op::FilteringRF)(acc, x) = op.f(x) ? op.rf(acc, x) : acc
@@ -111,6 +113,7 @@ Create a flattening reducing function that is roughly equivalent to
 """
 struct FlatteningRF{T}
     rf::T
+    FlatteningRF(@nospecialize(rf)) = new{TypeofValid(rf)}(rf)
 end
 
 @inline function (op::FlatteningRF)(acc, x)
@@ -201,6 +204,7 @@ _reverse_iter(itr::Union{Tuple,NamedTuple}) = length(itr) <= 32 ? reverse(itr) :
 
 struct FlipArgs{F}
     f::F
+    FlipArgs(@nospecialize(rf)) = new{TypeofValid(rf)}(rf)
 end
 
 @inline (f::FlipArgs)(x, y) = f.f(y, x)
@@ -1281,6 +1285,7 @@ end
 ## count
 
 _bool(f) = x->f(x)::Bool
+_bool(::Type{Bool}) = Bool
 
 """
     count([f=identity,] itr; init=0) -> Integer

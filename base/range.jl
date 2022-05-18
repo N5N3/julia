@@ -926,6 +926,13 @@ end
 
 iterate(r::OrdinalRange) = isempty(r) ? nothing : (first(r), first(r))
 
+function iterate(r::AbstractUnitRange{T}, i) where {T}
+    @inline
+    i >= last(r) && return nothing
+    next = convert(T, i + step(r))
+    (next, next)
+end
+
 function iterate(r::OrdinalRange{T}, i) where {T}
     @inline
     i == last(r) && return nothing

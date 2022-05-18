@@ -3,7 +3,7 @@
 ### Multidimensional iterators
 module IteratorsMD
     import .Base: eltype, length, size, first, last, in, getindex, setindex!,
-                  min, max, zero, oneunit, isless, eachindex,
+                  min, max, zero, oneunit, isless, eachindex, isempty,
                   convert, show, iterate, promote_rule, to_indices, copy
 
     import .Base: +, -, *, (:)
@@ -413,10 +413,8 @@ module IteratorsMD
     end
 
     @inline function iterate(iter::CartesianIndices)
+        isempty(iter) && return nothing
         iterfirst = first(iter)
-        if !all(map(in, iterfirst.I, iter.indices))
-            return nothing
-        end
         iterfirst, iterfirst
     end
     @inline function iterate(iter::CartesianIndices, state)
@@ -458,6 +456,8 @@ module IteratorsMD
     size(iter::CartesianIndices) = map(length, iter.indices)
 
     length(iter::CartesianIndices) = prod(size(iter))
+
+    isempty(iter::CartesianIndices) = any(isempty, iter.indices)
 
     # make CartesianIndices a multidimensional range
     Base.step(iter::CartesianIndices) = CartesianIndex(map(step, iter.indices))
@@ -544,10 +544,8 @@ module IteratorsMD
         Base._reverse(iter, first(dims))
 
     @inline function iterate(r::Reverse{<:CartesianIndices})
+        isempty(r.itr) && return nothing
         iterfirst = last(r.itr)
-        if !all(map(in, iterfirst.I, r.itr.indices))
-            return nothing
-        end
         iterfirst, iterfirst
     end
     @inline function iterate(r::Reverse{<:CartesianIndices}, state)

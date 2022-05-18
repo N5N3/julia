@@ -1223,11 +1223,19 @@ oneunit(x::AbstractMatrix{T}) where {T} = _one(oneunit(T), x)
 # While the definitions for IndexLinear are all simple enough to inline on their
 # own, IndexCartesian's CartesianIndices is more complicated and requires explicit
 # inlining.
-function iterate(A::AbstractArray, state=(eachindex(A),))
-    @_propagate_inbounds_meta
-    y = iterate(state...)
+function iterate(A::AbstractArray)
+    @inline
+    idx = eachindex(A)
+    y = iterate(idx)
     y === nothing && return nothing
-    A[y[1]], (state[1], tail(y)...)
+    @inbounds(A[y[1]]), (idx, y[2])
+end
+
+function iterate(A::AbstractArray, (idx, state))
+    @_propagate_inbounds_meta
+    y = iterate(idx, state)
+    y === nothing && return nothing
+    A[y[1]], (idx, y[2])
 end
 
 isempty(a::AbstractArray) = (length(a) == 0)

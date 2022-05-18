@@ -409,6 +409,10 @@ end
         i = CartesianIndex(typemax(Int)-1)
         @test iterate(I, i) === nothing
 
+        I = CartesianIndices((1:2:typemax(Int)-1, ))
+        i = CartesianIndex(typemax(Int)-2)
+        @test iterate(I, i) === nothing
+
         I = CartesianIndices((1:typemax(Int), 1:typemax(Int)))
         i = last(I)
         @test iterate(I, i) === nothing
