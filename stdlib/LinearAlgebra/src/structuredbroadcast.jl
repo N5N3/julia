@@ -95,12 +95,13 @@ structured_broadcast_alloc(bc, ::Type{<:Matrix}, ::Type{ElType}, n) where {ElTyp
 # A _very_ limited list of structure-preserving functions known at compile-time. This list is
 # derived from the formerly-implemented `broadcast` methods in 0.6. Note that this must
 # preserve both zeros and ones (for Unit***erTriangular) and symmetry (for SymTridiagonal)
+import Base.Broadcast: RefSome
 const TypeFuncs = Union{typeof(round),typeof(trunc),typeof(floor),typeof(ceil)}
 isstructurepreserving(bc::Broadcasted) = isstructurepreserving(bc.f, bc.args...)
 isstructurepreserving(::Union{typeof(abs),typeof(big)}, ::StructuredMatrix) = true
 isstructurepreserving(::TypeFuncs, ::StructuredMatrix) = true
-isstructurepreserving(::TypeFuncs, ::Ref{<:Type}, ::StructuredMatrix) = true
-function isstructurepreserving(::typeof(Base.literal_pow), ::Ref{typeof(^)}, ::StructuredMatrix, ::Ref{Val{N}}) where N
+isstructurepreserving(::TypeFuncs, ::RefSome{<:Type}, ::StructuredMatrix) = true
+function isstructurepreserving(::typeof(Base.literal_pow), ::RefSome{typeof(^)}, ::StructuredMatrix, ::RefSome{Val{N}}) where N
     return N isa Integer && N > 0
 end
 isstructurepreserving(f, args...) = false
@@ -135,7 +136,7 @@ fzeropreserving(bc) = (v = fzero(bc); !ismissing(v) && (iszerodefined(typeof(v))
 # matrix. If any non-structured matrix argument is not a known scalar, we give up.
 fzero(x::Number) = x
 fzero(::Type{T}) where T = T
-fzero(r::Ref) = r[]
+fzero(r::RefSome) = r[]
 fzero(t::Tuple{Any}) = t[1]
 fzero(S::StructuredMatrix) = zero(eltype(S))
 fzero(x) = missing

@@ -470,3 +470,13 @@ pinv(v::TransposeAbsVec, tol::Real = 0) = pinv(conj(v.parent)).parent
 ## complex conjugate
 conj(A::Transpose) = adjoint(A.parent)
 conj(A::Adjoint) = transpose(A.parent)
+
+## Broadcast optimization
+for (f, T) in ((:transpose, :Transpose), (:adjoint, :Adjoint))
+    @eval Broadcast.knownsize1(::$T{<:Any,<:AbstractVector}) = true
+    @eval Broadcast.extrude(x::$T{<:Any,<:AbstractVector}) = x
+    @eval Base.@propagate_inbounds Broadcast._broadcast_getindex(x::$T{<:Any,<:AbstractVector}, I::CartesianIndex) =
+         $f(x.parent[I.I[2]])
+    @eval Base.@propagate_inbounds Broadcast._broadcast_getindex(x::$T{<:Any,<:AbstractVector}, i::Integer) =
+         $f(x.parent[])
+end

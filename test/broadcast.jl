@@ -49,10 +49,10 @@ ci(x) = CartesianIndex(x)
 @test @inferred(newindex(ci((2,2)), (true, false), (-1,-1)))  == ci((2,-1))
 @test @inferred(newindex(ci((2,2)), (false, true), (-1,-1)))  == ci((-1,2))
 @test @inferred(newindex(ci((2,2)), (false, false), (-1,-1))) == ci((-1,-1))
-@test @inferred(newindex(ci((2,2)), (true,), (-1,-1)))   == ci((2,))
 @test @inferred(newindex(ci((2,2)), (true,), (-1,)))   == ci((2,))
 @test @inferred(newindex(ci((2,2)), (false,), (-1,))) == ci((-1,))
 @test @inferred(newindex(ci((2,2)), (), ())) == ci(())
+@test @inferred(newindex(ci((2,)), (true, false, false), (-1, -1, -1))) == ci((2, -1))
 
 end
 
@@ -421,11 +421,13 @@ let
     @test @inferred(g()) === Float64
 end
 
-# Ref as 0-dimensional array for broadcast
+# Ref/Scalar as 0-dimensional array for broadcast
 @test (-).(C_NULL, C_NULL)::UInt == 0
-@test (+).(1, Ref(2)) == 3
-@test (+).(Ref(1), Ref(2)) == 3
-@test (+).([[0,2], [1,3]], Ref{Vector{Int}}([1,-1])) == [[1,1], [2,2]]
+for f in (Ref, Broadcast.Scalar)
+    @test (+).(1, f(2)) == 3
+    @test (+).(f(1), f(2)) == 3
+    @test (+).([[0,2], [1,3]], f{Vector{Int}}([1,-1])) == [[1,1], [2,2]]
+end
 
 # Check that broadcast!(f, A) populates A via independent calls to f (#12277, #19722),
 # and similarly for broadcast!(f, A, numbers...) (#19799).
@@ -774,14 +776,25 @@ let X = zeros(2, 3)
 end
 
 # issue #27988: inference of Broadcast.flatten
-using .Broadcast: Broadcasted
-let
-    bc = Broadcasted(+, (Broadcasted(*, (1, 2)), Broadcasted(*, (Broadcasted(*, (3, 4)), 5))))
-    @test @inferred(Broadcast.cat_nested(bc)) == (1,2,3,4,5)
-    @test @inferred(Broadcast.materialize(Broadcast.flatten(bc))) == @inferred(Broadcast.materialize(bc)) == 62
-    bc = Broadcasted(+, (Broadcasted(*, (1, Broadcasted(/, (2.0, 2.5)))), Broadcasted(*, (Broadcasted(*, (3, 4)), 5))))
-    @test @inferred(Broadcast.cat_nested(bc)) == (1,2.0,2.5,3,4,5)
-    @test @inferred(Broadcast.materialize(Broadcast.flatten(bc))) == @inferred(Broadcast.materialize(bc)) == 60.8
+using .Broadcast: Broadcasted, cat_nested
+let flatten_materialize(bc) = @inferred(Broadcast.materialize(@inferred(Broadcast.flatten(bc))))
+    for f in (identity, (x) -> broadcast(a->[a;], x))
+        bc = Broadcasted(+, (Broadcasted(*, f((1, 2))), Broadcasted(*, (Broadcasted(*, f((3, 4))), f(5)))))
+        @test flatten_materialize(bc) == @inferred(Broadcast.materialize(bc)) == f(62)
+        bc = Broadcasted(+, (Broadcasted(*, (f(1), Broadcasted(/, f.((2.0, 2.5))))), Broadcasted(*, (Broadcasted(*, f((3, 4))), f(5)))))
+        @test flatten_materialize(bc) == @inferred(Broadcast.materialize(bc)) == f(60.8)
+        # 1 .* 1 .- 1 .* 1 .^2 .+ 1 .* 1 .+ 1 .^ 3
+        bc = Broadcasted(+, (Broadcasted(+, (Broadcasted(-, (Broadcasted(*, f((1, 1))), Broadcasted(*, (f(1), Broadcasted(Base.literal_pow, (Ref(^), f(1), Ref(Val(2)))))))), Broadcasted(*, f((1, 1))))), Broadcasted(Base.literal_pow, (Base.RefValue{typeof(^)}(^), f(1), Base.RefValue{Val{3}}(Val{3}())))))
+        @test flatten_materialize(bc) == @inferred(Broadcast.materialize(bc)) == f(2)
+        # @. 1 + 1 * (1 + 1 + 1 + 1)
+        bc = Broadcasted(+, (f(1), Broadcasted(*, (f(1), Broadcasted(+, f((1, 1, 1, 1)))))))
+        @test flatten_materialize(bc) == Broadcast.materialize(bc)
+        # @. 1 + (1 + 1) + 1 + (1 + 1) + 1 + (1 + 1) + 1
+        bc = Broadcasted(+, (f(1), Broadcasted(+, f((1, 1))), f(1), Broadcasted(+, f((1, 1))), f(1), Broadcasted(+, f((1, 1))), f(1)))
+        @test flatten_materialize(bc) == Broadcast.materialize(bc)
+        bc = Broadcasted(Float32, (Broadcasted(+, f((1, 1))),))
+        @test flatten_materialize(bc) == Broadcast.materialize(bc)
+    end
 end
 
 let
@@ -830,29 +843,34 @@ let
     @test Dict(c .=> d) == Dict("foo" => 1, "bar" => 2)
 end
 
-# Broadcasted iterable/indexable APIs
-let
-    bc = Broadcast.instantiate(Broadcast.broadcasted(+, zeros(5), 5))
-    @test IndexStyle(bc) == IndexLinear()
-    @test eachindex(bc) === Base.OneTo(5)
-    @test length(bc) === 5
-    @test ndims(bc) === 1
-    @test ndims(typeof(bc)) === 1
-    @test bc[1] === bc[CartesianIndex((1,))] === 5.0
-    @test copy(bc) == [v for v in bc] == collect(bc)
-    @test eltype(copy(bc)) == eltype([v for v in bc]) == eltype(collect(bc))
-    @test ndims(copy(bc)) == ndims([v for v in bc]) == ndims(collect(bc)) == ndims(bc)
+isdefined(Main, :OffsetArrays) || @eval Main include("testhelpers/OffsetArrays.jl")
+using .Main.OffsetArrays
+@testset "Broadcasted iterable/indexable APIs" begin
+    for f in (identity, x -> OffsetArray(x, ntuple(Returns(-1), ndims(x))))
+        a = f(zeros(5))
+        bc = Broadcast.instantiate(Broadcast.broadcasted(+, a, 5))
+        @test IndexStyle(bc) == IndexLinear()
+        @test eachindex(bc) === eachindex(a)
+        @test length(bc) === 5
+        @test ndims(bc) === 1
+        @test ndims(typeof(bc)) === 1
+        @test bc[1] === bc[CartesianIndex((1,))] === 5.0
+        @test copy(bc) == [v for v in bc] == collect(bc)
+        @test eltype(copy(bc)) == eltype([v for v in bc]) == eltype(collect(bc))
+        @test ndims(copy(bc)) == ndims([v for v in bc]) == ndims(collect(bc)) == ndims(bc)
 
-    bc = Broadcast.instantiate(Broadcast.broadcasted(+, zeros(5), 5*ones(1, 4)))
-    @test IndexStyle(bc) == IndexCartesian()
-    @test eachindex(bc) === CartesianIndices((Base.OneTo(5), Base.OneTo(4)))
-    @test length(bc) === 20
-    @test ndims(bc) === 2
-    @test ndims(typeof(bc)) === 2
-    @test bc[1,1] == bc[CartesianIndex((1,1))] === 5.0
-    @test copy(bc) == [v for v in bc] == collect(bc)
-    @test eltype(copy(bc)) == eltype([v for v in bc]) == eltype(collect(bc))
-    @test ndims(copy(bc)) == ndims([v for v in bc]) == ndims(collect(bc)) == ndims(bc)
+        b = f(5*ones(1, 4))
+        bc = Broadcast.instantiate(Broadcast.broadcasted(+, a, b))
+        @test IndexStyle(bc) == IndexCartesian()
+        @test eachindex(bc) === CartesianIndices((axes(a, 1), axes(b, 2)))
+        @test length(bc) === 20
+        @test ndims(bc) === 2
+        @test ndims(typeof(bc)) === 2
+        @test bc[1,1] == bc[CartesianIndex((1,1))] === 5.0
+        @test copy(bc) == [v for v in bc] == collect(bc)
+        @test eltype(copy(bc)) == eltype([v for v in bc]) == eltype(collect(bc))
+        @test ndims(copy(bc)) == ndims([v for v in bc]) == ndims(collect(bc)) == ndims(bc)
+    end
 end
 
 # issue 43847: collect preserves shape of broadcasted
@@ -952,7 +970,7 @@ end
     @test reduce(paren, bcraw) == foldl(paren, xs)
 
     # issue #41055
-    bc = Broadcast.instantiate(Broadcast.broadcasted(Base.literal_pow, Ref(^), [1,2], Ref(Val(2))))
+    bc = Broadcast.instantiate(Broadcast.broadcasted(Base.literal_pow, ^, [1,2], Val(2)))
     @test sum(bc, dims=1, init=0) == [5]
     bc = Broadcast.instantiate(Broadcast.broadcasted(*, ['a','b'], 'c'))
     @test prod(bc, dims=1, init="") == ["acbc"]
@@ -1067,25 +1085,17 @@ end
     @test Cyclotomic() .* [2, 3] == [[1, 2], [1, 2]]
 end
 
+isdefined(Main, :OffsetArrays) || @eval Main include("testhelpers/OffsetArrays.jl")
+using .Main.OffsetArrays
 @testset "inplace broadcast with trailing singleton dims" begin
-    for (a, b, c) in (([1, 2], reshape([3 4], :, 1), reshape([5, 6], :, 1, 1)),
+    for (a_, b_, c_) in (([1, 2], reshape([3 4], :, 1), reshape([5, 6], :, 1, 1)),
             ([1 2; 3 4], reshape([5 6; 7 8], 2, 2, 1), reshape([9 10; 11 12], 2, 2, 1, 1)))
-
-        a_ = copy(a)
-        a_ .= b
-        @test a_ == dropdims(b, dims=(findall(==(1), size(b))...,))
-
-        a_ = copy(a)
-        a_ .= b
-        @test a_ == dropdims(b, dims=(findall(==(1), size(b))...,))
-
-        a_ = copy(a)
-        a_ .= b .+ c
-        @test a_ == dropdims(b .+ c, dims=(findall(==(1), size(c))...,))
-
-        a_ = copy(a)
-        a_ .*= c
-        @test a_ == dropdims(a .* c, dims=(findall(==(1), size(c))...,))
+        for fun in (x -> OffsetArray(x, ntuple(Returns(1), ndims(x))), identity)
+            a, b, c = fun(a_), fun(b_), fun(c_)
+            @test (deepcopy(a) .= b) == dropdims(b, dims=(findall(==(1), size(b))...,))
+            @test (deepcopy(a) .= b .+ c) == dropdims(b .+ c, dims=(findall(==(1), size(c))...,))
+            @test (deepcopy(a) .*= c)  == dropdims(a .* c, dims=(findall(==(1), size(c))...,))
+        end
     end
 end
 
@@ -1137,3 +1147,54 @@ end
 import Base.Broadcast: BroadcastStyle, DefaultArrayStyle
 @test Base.infer_effects(BroadcastStyle, (DefaultArrayStyle{1},DefaultArrayStyle{2},)) |>
     Core.Compiler.is_foldable
+
+@testset "axes1 and axes" begin
+    bc = Base.broadcasted(+, reshape(1:6,3,:), 1)
+    @test Base.axes(bc) == (Base.OneTo(3),Base.OneTo(2))
+    @test Base.axes1(bc) == axes(bc, 1) == Base.OneTo(3)
+    bc = Broadcast.instantiate(bc)
+    @test Base.axes(bc) == (Base.OneTo(3),Base.OneTo(2))
+    @test Base.axes1(bc) == axes(bc, 1) == Base.OneTo(3)
+    bc = Base.broadcasted(+, fill(1), 1)
+    @test Base.axes(bc) == ()
+    @test Base.axes1(bc) == axes(bc, 1) == Base.OneTo(1)
+end
+
+@testset "Inplace Broadcast vectorizaion" begin
+    bc = Broadcast.instantiate(Broadcast.broadcasted(+,[1],view([1],1:1)))
+    @test Broadcast.isivdepsafe(bc)
+    bc = Broadcast.preprocess(nothing, bc)
+    @test Broadcast.isivdepsafe(bc)
+    a = Ref(1)
+    f(x, y) = (a[i] = -a[i]; x + y + a[i];)
+    bc = Broadcast.instantiate(Broadcast.broadcasted(f,[1],view([1],1:1)))
+    bc = Broadcast.preprocess(nothing, bc)
+    @test !Broadcast.isivdepsafe(bc)
+    a = randn(3,3)
+    @test Broadcast.isivdepsafe(a)
+    a = view(a,:,1:3)
+    @test Broadcast.isivdepsafe(a)
+    a = reshape(a, :)
+    @test Broadcast.isivdepsafe(a)
+    a = reinterpret(Int, a)
+    @test Broadcast.isivdepsafe(a)
+end
+
+module IRUtils
+    include("compiler/irutils.jl")
+end
+
+# Make sure `isivdepsafe` for Broadcast is fully_eliminated after `instantiate`
+let bc = Base.broadcasted(+,randn(1),randn(1))
+    bc = Base.broadcasted(sin,bc)
+    bc = Base.broadcasted(exp,bc)
+    bc = Base.broadcasted(^,bc,randn(1))
+    bc = Base.broadcasted(-,bc,randn(1))
+    f(bc) = Broadcast.isivdepsafe(bc) ? Val(1) : Val(2)
+    # @test_broken IRUtils.fully_eliminated(f, Base.typesof(bc); retval = Val(2))
+    @test @inferred(f(bc)) == Val(2)
+    bc = Broadcast.instantiate(bc)
+    @test IRUtils.fully_eliminated(f, Base.typesof(bc); retval = Val(1))
+    bc = Broadcast.preprocess(nothing, bc)
+    @test IRUtils.fully_eliminated(f, Base.typesof(bc); retval = Val(1))
+end
