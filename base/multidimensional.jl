@@ -2051,3 +2051,40 @@ end
     end
     dest
 end
+
+@inline function _mapreduce(f, op, ::IndexCartesian, A::AbstractArrayOrBroadcasted)
+    length(A) <= 16 && return mapfoldl(f, op, A)
+    inds = CartesianIndices(A)
+    return mapreduce_impl(f, op, A, first(inds), last(inds))
+end
+
+function mapreduce_impl(f, op,
+    A::AbstractArrayOrBroadcasted,
+    fi::CartesianIndex{N},
+    li::CartesianIndex{N},
+    blksize::Int=pairwise_blocksize(f, op)) where {N}
+    iter = fi:li
+    if length(iter) <= blksize
+        @inbounds A1 = A[fi]
+        temp = iterate(iter, fi)
+        temp === nothing && return mapreduce_first(f, op, A1)
+        I, state = temp
+        @inbounds A2 = A[I]
+        v = op(f(A1), f(A2))
+        @simd for I in Iterators.drop(iter, 2)
+            v = op(v, f(@inbounds(A[I])))
+        end
+        return v
+    else
+        # pairwise portion
+        n = N
+        while n > 1 && li[n] == fi[n]
+            n -= 1
+        end
+        @assert li[n] != fi[n]
+        mid = midpoint(fi[n], li[n])
+        v1 = @noinline mapreduce_impl(f, op, A, fi, setindex(li, mid, n), blksize)
+        v2 = @noinline mapreduce_impl(f, op, A, setindex(fi, mid + 1, n), li, blksize)
+        return op(v1, v2)
+    end
+end
