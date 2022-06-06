@@ -251,7 +251,7 @@ ComplexTypes = Union{ComplexF32, ComplexF64}
     # that the compiler can convert between them
     max_fast(x::T, y::T) where {T<:FloatTypes} = ifelse(y > x, y, x)
     min_fast(x::T, y::T) where {T<:FloatTypes} = ifelse(y > x, x, y)
-    minmax_fast(x::T, y::T) where {T<:FloatTypes} = ifelse(y > x, (x,y), (y,x))
+    minmax_fast(x::T, y::T) where {T<:FloatTypes} = min(x, y), max(x, y)
 
     max_fast(x::T, y::T, z::T...) where {T<:FloatTypes} = max_fast(max_fast(x, y), z...)
     min_fast(x::T, y::T, z::T...) where {T<:FloatTypes} = min_fast(min_fast(x, y), z...)
