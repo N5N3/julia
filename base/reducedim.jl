@@ -17,59 +17,36 @@ reduced_indices(a::AbstractArrayOrBroadcasted, region) = reduced_indices(axes(a)
 # for reductions that keep 0 dims as 0
 reduced_indices0(a::AbstractArray, region) = reduced_indices0(axes(a), region)
 
-function reduced_indices(inds::Indices{N}, d::Int) where N
+function reduced_indices(inds::Indices, d::Int)
     d < 1 && throw(ArgumentError("dimension must be ≥ 1, got $d"))
-    if d == 1
-        return (reduced_index(inds[1]), tail(inds)...)::typeof(inds)
-    elseif 1 < d <= N
-        return tuple(inds[1:d-1]..., oftype(inds[d], reduced_index(inds[d])), inds[d+1:N]...)::typeof(inds)
-    else
-        return inds
-    end
+    d > length(inds) && return inds
+    ind = inds[d]
+    rd = oftype(ind, reduced_index(ind))
+    return setindex(inds, rd, d)::typeof(inds)
 end
 
-function reduced_indices0(inds::Indices{N}, d::Int) where N
+function reduced_indices0(inds::Indices, d::Int)
     d < 1 && throw(ArgumentError("dimension must be ≥ 1, got $d"))
-    if d <= N
-        ind = inds[d]
-        rd = isempty(ind) ? ind : reduced_index(inds[d])
-        if d == 1
-            return (rd, tail(inds)...)::typeof(inds)
-        else
-            return tuple(inds[1:d-1]..., oftype(inds[d], rd), inds[d+1:N]...)::typeof(inds)
-        end
-    else
-        return inds
-    end
+    d > length(inds) && return inds
+    ind = inds[d]
+    rd = isempty(ind) ? ind : oftype(ind, reduced_index(ind))
+    return setindex(inds, rd, d)::typeof(inds)
 end
 
-function reduced_indices(inds::Indices{N}, region) where N
-    rinds = collect(inds)
+function reduced_indices(inds::Indices, region)
     for i in region
         isa(i, Integer) || throw(ArgumentError("reduced dimension(s) must be integers"))
-        d = Int(i)
-        if d < 1
-            throw(ArgumentError("region dimension(s) must be ≥ 1, got $d"))
-        elseif d <= N
-            rinds[d] = reduced_index(rinds[d])
-        end
+        inds = reduced_indices(inds, Int(i))
     end
-    tuple(rinds...)::typeof(inds)
+    return inds
 end
 
-function reduced_indices0(inds::Indices{N}, region) where N
-    rinds = collect(inds)
+function reduced_indices0(inds::Indices, region)
     for i in region
         isa(i, Integer) || throw(ArgumentError("reduced dimension(s) must be integers"))
-        d = Int(i)
-        if d < 1
-            throw(ArgumentError("region dimension(s) must be ≥ 1, got $d"))
-        elseif d <= N
-            rind = rinds[d]
-            rinds[d] = isempty(rind) ? rind : reduced_index(rind)
-        end
+        inds = reduced_indices0(inds, Int(i))
     end
-    tuple(rinds...)::typeof(inds)
+    return inds
 end
 
 ###### Generic reduction functions #####
@@ -141,7 +118,7 @@ for (f1, f2, initval, typeextreme) in ((:min, :max, :Inf, :typemax), (:max, :min
             return map(f, A1)
         else
             # otherwise use the min/max of the first slice as initial value
-            v0 = mapreduce(f, $f2, A1)
+            v0 = _mapreduce(f, $f2, A1)
 
             T = _realtype(f, promote_union(eltype(A)))
             Tr = v0 isa T ? T : typeof(v0)
@@ -178,7 +155,7 @@ function reducedim_init(f::ExtremaMap, op::typeof(_extrema_rf), A::AbstractArray
 
     isempty(A1) && return map(f, A1)
     # use the max/min of the first slice as initial value for non-empty cases
-    v0 = reverse(mapreduce(f, op, A1)) # turn minmax to maxmin
+    v0 = reverse(_mapreduce(f, op, A1)) # turn minmax to maxmin
 
     T = _realtype(f.f, promote_union(eltype(A)))
     Tmin = v0[1] isa T ? T : typeof(v0[1])
