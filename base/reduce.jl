@@ -449,11 +449,6 @@ end
 
 mapreduce(f, op, a::Number) = mapreduce_first(f, op, a)
 
-_mapreduce(f, op, ::IndexCartesian, A::AbstractArrayOrBroadcasted) = mapfoldl(f, op, A)
-
-@inline _mapreduce(f, op, ::IndexCartesian, A::AbstractVector) =
-    _mapreduce(f, op, IndexLinear(), A)
-
 """
     reduce(op, itr; [init])
 

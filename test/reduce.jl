@@ -738,3 +738,16 @@ end
     @test @inferred(minimum(Float64, 1:3)) == 1.0
     @test @inferred(maximum(Float64, 1:3)) == 3.0
 end
+
+@testset "mapreduce for IndexCartesian" begin
+    fslow(a) = view(a, axes(a)...)
+    a = ones(2000)
+    for _a in (reshape(a, 10, 10, :), reshape(a, 20, :), reshape(a, 4, 4, 5, :))
+        @test @inferred sum(fslow(_a)) == 2000
+    end
+    # order test
+    a = randn(10000)
+    for _a in (reshape(a, 10, 10, 10, 10), reshape(a, 20, 20, 25), reshape(a, 4, 4, 5, :))
+        @test reduce((x,y)->vcat(x,y), fslow(_a)) == a
+    end
+end
