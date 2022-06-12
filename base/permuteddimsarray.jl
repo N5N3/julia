@@ -277,7 +277,7 @@ regions.
 
 See also [`permutedims`](@ref).
 """
-function permutedims!(dest, src::AbstractArray, perm)
+Base.@constprop :aggressive function permutedims!(dest, src::AbstractArray, perm)
     Base.checkdims_perm(axes(dest), axes(src), perm)
     P = PermutedDimsArray(dest, invperm(perm))
     _copy!(P, src)

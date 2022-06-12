@@ -55,14 +55,13 @@ true
 function setindex(x::Tuple, v, i::Integer)
     @boundscheck 1 <= i <= length(x) || throw(BoundsError(x, i))
     @inline
-    _setindex(v, i, x...)
+    _setindex(x, v, i)
 end
 
-function _setindex(v, i::Integer, args::Vararg{Any,N}) where {N}
+function _setindex(x::Tuple, v, i::Integer)
     @inline
-    return ntuple(j -> ifelse(j == i, v, args[j]), Val{N}())
+    ntuple(j -> ifelse(j == i, v, x[j]), Val(length(x)))
 end
-
 
 ## iterating ##
 

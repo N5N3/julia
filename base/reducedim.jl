@@ -103,7 +103,7 @@ for (f1, f2, initval, typeextreme) in ((:min, :max, :Inf, :typemax), (:max, :min
             return map(f, A1)
         else
             # otherwise use the min/max of the first slice as initial value
-            v0 = mapreduce(f, $f2, A1)
+            v0 = _mapreduce(f, $f2, A1)
 
             T = _realtype(f, promote_union(eltype(A)))
             Tr = v0 isa T ? T : typeof(v0)
@@ -142,7 +142,7 @@ function reducedim_init(f::ExtremaMap, op::typeof(_extrema_rf), A::AbstractArray
 
     isempty(A1) && return map(f, A1)
     # use the max/min of the first slice as initial value for non-empty cases
-    v0 = reverse(mapreduce(f, op, A1)) # turn minmax to maxmin
+    v0 = reverse(_mapreduce(f, op, A1)) # turn minmax to maxmin
 
     T = _realtype(f.f, promote_union(eltype(A)))
     Tmin = v0[1] isa T ? T : typeof(v0[1])

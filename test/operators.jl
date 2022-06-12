@@ -115,11 +115,13 @@ end
     min1(a, b) = Base.isgreater(a, b) ? b : a
     # min promotes numerical arguments to the same type, but our quick min1
     # doesn't, so use float test values instead of ints.
-    values = (1.0, 5.0, NaN, missing, Inf)
-    for a in values, b in values
-        @test min(a, b) === min1(a, b)
-        @test min((a,), (b,)) === min1((a,), (b,))
-        @test all(min([a], [b]) .=== min1([a], [b]))
+    for T in (Float16, Float64, BigFloat)
+        values = (T(1.0), T(5.0), T(NaN), missing, T(Inf))
+        for a in values, b in values
+            @test min(a, b) === min1(a, b)
+            @test min((a,), (b,)) === min1((a,), (b,))
+            @test all(min([a], [b]) .=== min1([a], [b]))
+        end
     end
 end
 

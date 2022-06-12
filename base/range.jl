@@ -790,10 +790,10 @@ let bigints = Union{Int, UInt, Int64, UInt64, Int128, UInt128},
     bitints = Union{bigints, smallints}
     global length, checked_length, firstindex
     # compile optimization for which promote_type(T, Int) == T
-    length(r::OneTo{T}) where {T<:bigints} = r.stop
+    length(r::OneTo{<:bigints}) = r.stop
     # slightly more accurate length and checked_length in extreme cases
     # (near typemax) for types with known `unsigned` functions
-    function length(r::OrdinalRange{T}) where T<:bigints
+    function length(r::OrdinalRange{<:bigints})
         s = step(r)
         diff = last(r) - first(r)
         isempty(r) && return zero(diff)
@@ -809,7 +809,20 @@ let bigints = Union{Int, UInt, Int64, UInt64, Int128, UInt128},
         end
         return a + oneunit(a)
     end
-    function checked_length(r::OrdinalRange{T}) where T<:bigints
+    function length(r::StepRange{<:bigints})
+        @_total_meta
+        diff = last(r) - first(r)
+        isempty(r) && return zero(diff)
+        if (s = step(r)) isa Unsigned || -1 <= s <= 1 || s == -s
+            a = div(diff, s) % typeof(diff)
+        elseif s < 0
+            a = div(unsigned(-diff), -s) % typeof(diff)
+        else
+            a = div(unsigned(diff), s) % typeof(diff)
+        end
+        return a + oneunit(a)
+    end
+    function checked_length(r::OrdinalRange{<:bigints})
         s = step(r)
         stop, start = last(r), first(r)
         ET = promote_type(typeof(stop), typeof(start))
@@ -828,7 +841,6 @@ let bigints = Union{Int, UInt, Int64, UInt64, Int128, UInt128},
         end
         return checked_add(a, oneunit(a))
     end
-    firstindex(r::StepRange{<:bigints,<:bitints}) = one(last(r)-first(r))
 
     # some special cases to favor default Int type
     function length(r::OrdinalRange{<:smallints})
@@ -837,12 +849,16 @@ let bigints = Union{Int, UInt, Int64, UInt64, Int128, UInt128},
         # n.b. !(step isa T)
         return Int(div(Int(last(r)) - Int(first(r)), s)) + 1
     end
+    function length(r::StepRange{<:smallints})
+        @_total_meta
+        isempty(r) && return 0
+        return Int(div(Int(last(r)) - Int(first(r)), step(r))) + 1
+    end
     length(r::AbstractUnitRange{<:smallints}) = Int(last(r)) - Int(first(r)) + 1
     length(r::OneTo{<:smallints}) = Int(r.stop)
     checked_length(r::OrdinalRange{<:smallints}) = length(r)
     checked_length(r::AbstractUnitRange{<:smallints}) = length(r)
     checked_length(r::OneTo{<:smallints}) = length(r)
-    firstindex(::StepRange{<:smallints,<:bitints}) = 1
 end
 
 first(r::OrdinalRange{T}) where {T} = convert(T, r.start)
