@@ -269,14 +269,16 @@ function _mapreducedim!(f, op, R::AbstractArray, A::AbstractArrayOrBroadcasted)
     keep, Idefault = Broadcast.shapeindexer(indsRt)
     if reducedim1(R, A)
         # keep the accumulator as a local variable when reducing along the first dimension
+        Eltype = _mapped_eltype(f, A)
+        prepf, reduf, postf = _makefast_reducution(op, Base.promote_typejoin(eltype(R), Eltype))
         i1 = first(axes1(R))
         for IA in CartesianIndices(indsAt)
             IR = Broadcast.newindex(IA, keep, Idefault)
-            @inbounds r = R[i1,IR]
+            r = prepf(@inbounds(R[i1,IR]))
             @simd for i in axes(A, 1)
-                r = op(r, f(@inbounds(A[i, IA])))
+                r = reduf(r, prepf(f(@inbounds(A[i, IA]))))
             end
-            @inbounds R[i1,IR] = r
+            @inbounds R[i1,IR] = postf(r)
         end
     else
         for IA in CartesianIndices(indsAt)
