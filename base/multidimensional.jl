@@ -2042,30 +2042,32 @@ function mapreduce_impl(f, op,
     fi::CartesianIndex{N},
     li::CartesianIndex{N},
     blksize::Int=pairwise_blocksize(f, op)) where {N}
+    Eltype = _mapped_eltype(f, A)
+    prepf, reduf, postf = _makefast_reducution(op, Eltype)
     iter = fi:li
     @inbounds if length(iter) <= blksize
         A1 = A[fi]
         temp = iterate(iter, fi)
         temp === nothing && return mapreduce_first(f, op, A1)
         I, state = temp
-        v = op(f(A1), f(A[I]))
+        v = reduf(prepf(f(A1)), prepf(f(A[I])))
         if size(iter, 1) <= 16
             for I in Iterators.rest(iter, state)
-                v = op(v, f(A[I]))
+                v = reduf(v, prepf(f(A[I])))
             end
         else
             J1 = CartesianIndex(tail(I.I))
             ax1, out = iter.indices[1], CartesianIndices(tail(iter.indices))
             @simd for i in I[1]+1:last(ax1)
-                v = op(v, f(A[i, J1]))
+                v = reduf(v, prepf(f(A[i, J1])))
             end
             for J in Iterators.rest(out, J1)
                 @simd for i in ax1
-                    v = op(v, f(A[i, J]))
+                    v = reduf(v, prepf(f(A[i, J])))
                 end
             end
         end
-        return v
+        return postf(v)
     else
         # pairwise portion
         n = findlast(i -> li[i] != fi[i], 1:N)::Int
