@@ -266,33 +266,35 @@ end
 
 AbstractZeroDimArray{T} = AbstractArray{T, 0}
 
+function reindex(vidxs::Tuple, idxs::Tuple)
+    @_propagate_inbounds_meta
+    ri, ridxs = reindex1(vidxs[1], idxs)
+    return (ri, reindex(tail(vidxs), ridxs)...)
+end
 reindex(::Tuple{}, ::Tuple{}) = ()
 
 # Skip dropped scalars, so simply peel them off the parent indices and continue
-reindex(idxs::Tuple{ScalarIndex, Vararg{Any}}, subidxs::Tuple{Vararg{Any}}) =
-    (@_propagate_inbounds_meta; (idxs[1], reindex(tail(idxs), subidxs)...))
+reindex1(vidx::ScalarIndex, idxs::Tuple) = vidx, idxs
 
 # Slices simply pass their subindices straight through
-reindex(idxs::Tuple{Slice, Vararg{Any}}, subidxs::Tuple{Any, Vararg{Any}}) =
-    (@_propagate_inbounds_meta; (subidxs[1], reindex(tail(idxs), tail(subidxs))...))
+reindex1(::Slice, idxs::Tuple{Any, Vararg{Any}}) = idxs[1], tail(idxs)
 
 # Re-index into parent vectors with one subindex
-reindex(idxs::Tuple{AbstractVector, Vararg{Any}}, subidxs::Tuple{Any, Vararg{Any}}) =
-    (@_propagate_inbounds_meta; (idxs[1][subidxs[1]], reindex(tail(idxs), tail(subidxs))...))
+reindex1(vidx::AbstractVector, subidxs::Tuple{Any, Vararg{Any}}) =
+    (@_propagate_inbounds_meta; (vidx[subidxs[1]], tail(subidxs)))
 
 # Parent matrices are re-indexed with two sub-indices
-reindex(idxs::Tuple{AbstractMatrix, Vararg{Any}}, subidxs::Tuple{Any, Any, Vararg{Any}}) =
-    (@_propagate_inbounds_meta; (idxs[1][subidxs[1], subidxs[2]], reindex(tail(idxs), tail(tail(subidxs)))...))
+reindex1(vidx::AbstractMatrix, subidxs::Tuple{Any, Any, Vararg{Any}}) =
+    (@_propagate_inbounds_meta; (vidx[subidxs[1], subidxs[2]], tail(tail(subidxs))))
 
-# In general, we index N-dimensional parent arrays with N indices
-@generated function reindex(idxs::Tuple{AbstractArray{T,N}, Vararg{Any}}, subidxs::Tuple{Vararg{Any}}) where {T,N}
-    if length(subidxs.parameters) >= N
-        subs = [:(subidxs[$d]) for d in 1:N]
-        tail = [:(subidxs[$d]) for d in N+1:length(subidxs.parameters)]
-        :(@_propagate_inbounds_meta; (idxs[1][$(subs...)], reindex(tail(idxs), ($(tail...),))...))
-    else
-        :(throw(ArgumentError("cannot re-index SubArray with fewer indices than dimensions\nThis should not occur; please submit a bug report.")))
+# Parent `AbstractArray{T,N}`` are re-indexed with `N` sub-indices
+function reindex1(vidx::AbstractArray, idxs::Tuple)
+    @_propagate_inbounds_meta
+    cidxs, ridxs = IteratorsMD.split(idxs, Val(ndims(vidx)))
+    if length(cidxs) == ndims(vidx)
+        return vidx[cidxs...], ridxs
     end
+    throw(ArgumentError("cannot re-index SubArray with fewer indices than dimensions\nThis should not occur; please submit a bug report."))
 end
 
 # In general, we simply re-index the parent indices by the provided ones
@@ -376,11 +378,13 @@ IndexStyle(::Type{<:SubArray}) = IndexCartesian()
 # which we determine from the strides of the parent
 strides(V::SubArray) = substrides(strides(V.parent), V.indices)
 
+substrides(strds::Dims, I::Tuple) = (_substrides1(strds[1], I[1])..., substrides(tail(strds), tail(I))...)
 substrides(strds::Tuple{}, ::Tuple{}) = ()
-substrides(strds::NTuple{N,Int}, I::Tuple{ScalarIndex, Vararg{Any}}) where N = (substrides(tail(strds), tail(I))...,)
-substrides(strds::NTuple{N,Int}, I::Tuple{Slice, Vararg{Any}}) where N = (first(strds), substrides(tail(strds), tail(I))...)
-substrides(strds::NTuple{N,Int}, I::Tuple{AbstractRange, Vararg{Any}}) where N = (first(strds)*step(I[1]), substrides(tail(strds), tail(I))...)
-substrides(strds, I::Tuple{Any, Vararg{Any}}) = throw(ArgumentError("strides is invalid for SubArrays with indices of type $(typeof(I[1]))"))
+
+_substrides1(st1::Int, I::ScalarIndex) = ()
+_substrides1(st1::Int, I::AbstractUnitRange) = (st1,)
+_substrides1(st1::Int, I::AbstractRange) = (st1*Int(step(I))::Int,)
+_substrides1(st1::Int, I) = throw(ArgumentError("strides is invalid for SubArrays with indices of type $(typeof(I))"))
 
 stride(V::SubArray, d::Integer) = d <= ndims(V) ? strides(V)[d] : strides(V)[end] * size(V)[end]
 
@@ -391,7 +395,7 @@ compute_stride1(s, inds, I::Tuple{Vararg{ScalarIndex}}) = s
 compute_stride1(s, inds, I::Tuple{ScalarIndex, Vararg{Any}}) =
     (@inline; compute_stride1(s*length(inds[1]), tail(inds), tail(I)))
 compute_stride1(s, inds, I::Tuple{AbstractRange, Vararg{Any}}) = s*step(I[1])
-compute_stride1(s, inds, I::Tuple{Slice, Vararg{Any}}) = s
+compute_stride1(s, inds, I::Tuple{AbstractUnitRange, Vararg{Any}}) = s
 compute_stride1(s, inds, I::Tuple{Any, Vararg{Any}}) = throw(ArgumentError("invalid strided index type $(typeof(I[1]))"))
 
 elsize(::Type{<:SubArray{<:Any,<:Any,P}}) where {P} = elsize(P)
@@ -412,43 +416,28 @@ end
 # The running sum is `f`; the cumulative stride product is `s`.
 # If the parent is a vector, then we offset the parent's own indices with parameters of I
 compute_offset1(parent::AbstractVector, stride1::Integer, I::Tuple{AbstractRange}) =
-    (@inline; first(I[1]) - stride1*first(axes1(I[1])))
-# If the result is one-dimensional and it's a Colon, then linear
-# indexing uses the indices along the given dimension.
-# If the result is one-dimensional and it's a range, then linear
+    (@inline; first(I[1]) - stride1*firstindex(I[1]))
+# If the result is one-dimensional and it's a range/Colon, then linear
 # indexing might be offset if the index itself is offset
 # Otherwise linear indexing always matches the parent.
 compute_offset1(parent, stride1::Integer, I::Tuple) =
-    (@inline; compute_offset1(parent, stride1, find_extended_dims(1, I...), find_extended_inds(I...), I))
-compute_offset1(parent, stride1::Integer, dims::Tuple{Int}, inds::Tuple{Slice}, I::Tuple) =
-    (@inline; compute_linindex(parent, I) - stride1*first(axes(parent, dims[1])))  # index-preserving case
-compute_offset1(parent, stride1::Integer, dims, inds::Tuple{AbstractRange}, I::Tuple) =
-    (@inline; compute_linindex(parent, I) - stride1*first(axes1(inds[1]))) # potentially index-offsetting case
-compute_offset1(parent, stride1::Integer, dims, inds, I::Tuple) =
-    (@inline; compute_linindex(parent, I) - stride1)
+    (@inline; compute_linindex(parent, I) - stride1*compute_firstindex(I))
+
+compute_firstindex(I::Tuple{ScalarIndex,Vararg{Any}}) = (@inline; compute_firstindex(tail(I)))
+compute_firstindex(I::Tuple{AbstractRange,Vararg{ScalarIndex}}) = (@inline; firstindex(I[1]))  # potentially index-offsetting case
+compute_firstindex(I::Tuple) = 1
+
 function compute_linindex(parent, I::NTuple{N,Any}) where N
     @inline
     IP = fill_to_length(axes(parent), OneTo(1), Val(N))
     compute_linindex(first(LinearIndices(parent)), 1, IP, I)
 end
-function compute_linindex(f, s, IP::Tuple, I::Tuple{ScalarIndex, Vararg{Any}})
-    @inline
-    Δi = I[1]-first(IP[1])
-    compute_linindex(f + Δi*s, s*length(IP[1]), tail(IP), tail(I))
-end
-function compute_linindex(f, s, IP::Tuple, I::Tuple{Any, Vararg{Any}})
+function compute_linindex(f, s, IP::Tuple, I::Tuple)
     @inline
     Δi = first(I[1])-first(IP[1])
     compute_linindex(f + Δi*s, s*length(IP[1]), tail(IP), tail(I))
 end
 compute_linindex(f, s, IP::Tuple, I::Tuple{}) = f
-
-find_extended_dims(dim, ::ScalarIndex, I...) = (@inline; find_extended_dims(dim + 1, I...))
-find_extended_dims(dim, i1, I...) = (@inline; (dim, find_extended_dims(dim + 1, I...)...))
-find_extended_dims(dim) = ()
-find_extended_inds(::ScalarIndex, I...) = (@inline; find_extended_inds(I...))
-find_extended_inds(i1, I...) = (@inline; (i1, find_extended_inds(I...)...))
-find_extended_inds() = ()
 
 function unsafe_convert(::Type{Ptr{T}}, V::SubArray{T,N,P,<:Tuple{Vararg{RangeIndex}}}) where {T,N,P}
     return unsafe_convert(Ptr{T}, V.parent) + _memory_offset(V.parent, map(first, V.indices)...)
@@ -469,13 +458,7 @@ end
 # indices are taken from the range/vector
 # Since bounds-checking is performance-critical and uses
 # indices, it's worth optimizing these implementations thoroughly
-axes(S::SubArray) = (@inline; _indices_sub(S.indices...))
-_indices_sub(::Real, I...) = (@inline; _indices_sub(I...))
-_indices_sub() = ()
-function _indices_sub(i1::AbstractArray, I...)
-    @inline
-    (axes(i1)..., _indices_sub(I...)...)
-end
+axes(S::SubArray) = (@inline; index_shape(S.indices...))
 
 has_offset_axes(S::SubArray) = has_offset_axes(S.indices...)
 

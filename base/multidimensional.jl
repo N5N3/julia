@@ -730,35 +730,28 @@ end
 # combined count of all indices, including CartesianIndex and
 # AbstractArray{CartesianIndex}
 # rather than returning N, it returns an NTuple{N,Bool} so the result is inferable
-@inline index_ndims(i1, I...) = (true, index_ndims(I...)...)
-@inline function index_ndims(i1::CartesianIndex, I...)
-    (map(Returns(true), i1.I)..., index_ndims(I...)...)
-end
-@inline function index_ndims(i1::AbstractArray{CartesianIndex{N}}, I...) where N
-    (ntuple(Returns(true), Val(N))..., index_ndims(I...)...)
-end
+@inline index_ndims(i1, I...) = (index_ndims1(i1)..., index_ndims(I...)...)
 index_ndims() = ()
+index_ndims1(_) = (true,)
+index_ndims1(i1::CartesianIndex) = map(Returns(true), i1.I)
+index_ndims1(i1::AbstractArray{CartesianIndex{N}}) where {N} = ntuple(Returns(true), Val(N))
 
 # combined dimensionality of all indices
 # rather than returning N, it returns an NTuple{N,Bool} so the result is inferable
-@inline index_dimsum(i1, I...) = (index_dimsum(I...)...,)
-@inline index_dimsum(::Colon, I...) = (true, index_dimsum(I...)...)
-@inline index_dimsum(::AbstractArray{Bool}, I...) = (true, index_dimsum(I...)...)
-@inline function index_dimsum(::AbstractArray{<:Any,N}, I...) where N
-    (ntuple(Returns(true), Val(N))..., index_dimsum(I...)...)
-end
+@inline index_dimsum(i1, I...) = (index_dimsum1(i1)..., index_dimsum(I...)...)
 index_dimsum() = ()
+index_dimsum1(_) = ()
+index_dimsum1(::AbstractArray{Bool}) = (true,)
+index_dimsum1(a::AbstractArray) = ntuple(Returns(true), Val(ndims(a)))
 
 # Recursively compute the lengths of a list of indices, without dropping scalars
+@inline index_lengths(A::ViewIndex, rest...) = (length(A), index_lengths(rest...)...)
 index_lengths() = ()
-@inline index_lengths(::Real, rest...) = (1, index_lengths(rest...)...)
-@inline index_lengths(A::AbstractArray, rest...) = (length(A), index_lengths(rest...)...)
 
 # shape of array to create for getindex() with indices I, dropping scalars
 # returns a Tuple{Vararg{AbstractUnitRange}} of indices
+@inline index_shape(i1::ViewIndex, I...) = (axes(i1)..., index_shape(I...)...)
 index_shape() = ()
-@inline index_shape(::Real, rest...) = index_shape(rest...)
-@inline index_shape(A::AbstractArray, rest...) = (axes(A)..., index_shape(rest...)...)
 
 """
     LogicalIndex(mask)
@@ -847,9 +840,10 @@ checkindex(::Type{Bool}, inds::Tuple, I::AbstractArray{Bool}) = _check_boolen_ax
 _check_boolen_axes(inds::Tuple, axes::Tuple) = (inds[1] == axes[1]) & _check_boolen_axes(tail(inds), tail(axes))
 _check_boolen_axes(::Tuple{}, axes::Tuple) = all(==(OneTo(1)), axes)
 
-ensure_indexable(I::Tuple{}) = ()
-@inline ensure_indexable(I::Tuple{Any, Vararg{Any}}) = (I[1], ensure_indexable(tail(I))...)
-@inline ensure_indexable(I::Tuple{LogicalIndex, Vararg{Any}}) = (collect(I[1]), ensure_indexable(tail(I))...)
+ensure_indexable(::Tuple{}) = ()
+@inline ensure_indexable(I::Tuple) = (ensure_indexable1(I[1]), ensure_indexable(tail(I))...)
+ensure_indexable1(x) = x
+ensure_indexable1(x::LogicalIndex) = collect(x)
 
 # In simple cases, we know that we don't need to use axes(A). Optimize those
 # until Julia gets smart enough to elide the call on its own:
@@ -1069,37 +1063,28 @@ _parentsmatch(A::AbstractArray, B::AbstractArray) = A === B
 # Two reshape(::Array)s of the same size aren't `===` because they have different headers
 _parentsmatch(A::Array, B::Array) = pointer(A) == pointer(B) && size(A) == size(B)
 
+@inline _indicesmightoverlap(A::Tuple, B::Tuple) =
+    _not_obviously_disjoint(A[1], B[1]) && _indicesmightoverlap(tail(A), tail(B))
 _indicesmightoverlap(A::Tuple{}, B::Tuple{}) = true
 _indicesmightoverlap(A::Tuple{}, B::Tuple) = error("malformed subarray")
 _indicesmightoverlap(A::Tuple, B::Tuple{}) = error("malformed subarray")
 # For ranges, it's relatively cheap to construct the intersection
-@inline function _indicesmightoverlap(A::Tuple{AbstractRange, Vararg{Any}}, B::Tuple{AbstractRange, Vararg{Any}})
-    !isempty(intersect(A[1], B[1])) ? _indicesmightoverlap(tail(A), tail(B)) : false
-end
+@inline _not_obviously_disjoint(A::AbstractRange, B::AbstractRange) = !isempty(intersect(A[1], B[1]))
 # But in the common AbstractUnitRange case, there's an even faster shortcut
-@inline function _indicesmightoverlap(A::Tuple{AbstractUnitRange, Vararg{Any}}, B::Tuple{AbstractUnitRange, Vararg{Any}})
-    max(first(A[1]),first(B[1])) <= min(last(A[1]),last(B[1])) ? _indicesmightoverlap(tail(A), tail(B)) : false
-end
+@inline _not_obviously_disjoint(A::AbstractUnitRange, B::AbstractUnitRange) =
+    max(first(A[1]),first(B[1])) <= min(last(A[1]),last(B[1]))
 # And we can check scalars against each other and scalars against arrays quite easily
-@inline _indicesmightoverlap(A::Tuple{Real, Vararg{Any}}, B::Tuple{Real, Vararg{Any}}) =
-    A[1] == B[1] ? _indicesmightoverlap(tail(A), tail(B)) : false
-@inline _indicesmightoverlap(A::Tuple{Real, Vararg{Any}}, B::Tuple{AbstractArray, Vararg{Any}}) =
-    A[1] in B[1] ? _indicesmightoverlap(tail(A), tail(B)) : false
-@inline _indicesmightoverlap(A::Tuple{AbstractArray, Vararg{Any}}, B::Tuple{Real, Vararg{Any}}) =
-    B[1] in A[1] ? _indicesmightoverlap(tail(A), tail(B)) : false
+@inline _not_obviously_disjoint(A::Real, B::Real) = A == B
+@inline _not_obviously_disjoint(A::Real, B::AbstractArray) = A in B
+@inline _not_obviously_disjoint(A::AbstractArray, B::Real) = B in A
 # And small arrays are quick, too
-@inline function _indicesmightoverlap(A::Tuple{AbstractArray, Vararg{Any}}, B::Tuple{AbstractArray, Vararg{Any}})
-    if length(A[1]) == 1
-        return A[1][1] in B[1] ? _indicesmightoverlap(tail(A), tail(B)) : false
-    elseif length(B[1]) == 1
-        return B[1][1] in A[1] ? _indicesmightoverlap(tail(A), tail(B)) : false
-    else
-        # But checking larger arrays requires O(m*n) and is too much work
-        return true
-    end
-end
+@inline _not_obviously_disjoint(A::AbstractArray, B::AbstractArray) =
+    length(A) == 1 ? A[1] in B :
+    length(B) == 1 ? B[1] in A :
+    true # But checking larger arrays requires O(m*n) and is too much work
+
 # And in general, checking the intersection is too much work
-_indicesmightoverlap(A::Tuple{Any, Vararg{Any}}, B::Tuple{Any, Vararg{Any}}) = true
+_not_obviously_disjoint(@nospecialize(A), @nospecialize(B)) = true
 
 """
     fill!(A, x)
