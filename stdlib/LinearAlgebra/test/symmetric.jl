@@ -498,6 +498,7 @@ end
 
 @testset "Issue # 19225" begin
     X = [1 -1; -1 1]
+    X′ = [1;;]
     for T in (Symmetric, Hermitian)
         Y = T(copy(X))
         _Y = similar(Y)
@@ -508,6 +509,8 @@ end
         copyto!(W, Y)
         @test W.data == Y.data
         @test W.uplo != Y.uplo
+        @test_throws DimensionMismatch copyto!(W, T(X′))
+        @test_throws DimensionMismatch copyto!(T(W.data), T(X′))
 
         W[1,1] = 4
         @test W == T([4 -1; -1 1])

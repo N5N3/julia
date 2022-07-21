@@ -215,12 +215,14 @@ end
 
     @testset for mat_type in (Tridiagonal, SymTridiagonal)
         A = mat_type == Tridiagonal ? mat_type(dl, d, du) : mat_type(d, dl)
+        A_1 = mat_type == Tridiagonal ? mat_type(1:n-2, 1:n-1, 1:n-2) : mat_type(1:n-1, 1:n-2)
         fA = map(elty <: Complex ? ComplexF64 : Float64, Array(A))
         @testset "similar, size, and copyto!" begin
             B = similar(A)
             @test size(B) == size(A)
             copyto!(B, A)
             @test B == A
+            @test_throws ArgumentError copyto!(B, A_1)
             @test isa(similar(A), mat_type{elty})
             @test isa(similar(A, Int), mat_type{Int})
             @test isa(similar(A, (3, 2)), Matrix)

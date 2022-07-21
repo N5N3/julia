@@ -151,8 +151,12 @@ end
 similar(S::SymTridiagonal, ::Type{T}) where {T} = SymTridiagonal(similar(S.dv, T), similar(S.ev, T))
 similar(S::SymTridiagonal, ::Type{T}, dims::Union{Dims{1},Dims{2}}) where {T} = similar(S.dv, T, dims)
 
-copyto!(dest::SymTridiagonal, src::SymTridiagonal) =
-    (copyto!(dest.dv, src.dv); copyto!(dest.ev, _evview(src)); dest)
+function copyto!(dest::SymTridiagonal, src::SymTridiagonal)
+    size(dest) == size(src) || return general_copyto!(dest, src)
+    copyto!(dest.dv, src.dv)
+    copyto!(dest.ev, _evview(src))
+    return dest
+end
 
 #Elementary operations
 for func in (:conj, :copy, :real, :imag)
@@ -561,7 +565,13 @@ similar(M::Tridiagonal, ::Type{T}) where {T} = Tridiagonal(similar(M.dl, T), sim
 similar(M::Tridiagonal, ::Type{T}, dims::Union{Dims{1},Dims{2}}) where {T} = similar(M.d, T, dims)
 
 # Operations on Tridiagonal matrices
-copyto!(dest::Tridiagonal, src::Tridiagonal) = (copyto!(dest.dl, src.dl); copyto!(dest.d, src.d); copyto!(dest.du, src.du); dest)
+function copyto!(dest::Tridiagonal, src::Tridiagonal)
+    size(dest) == size(src) || return general_copyto!(dest, src)
+    copyto!(dest.dl, src.dl)
+    copyto!(dest.d, src.d)
+    copyto!(dest.du, src.du)
+    return dest
+end
 
 #Elementary operations
 for func in (:conj, :copy, :real, :imag)

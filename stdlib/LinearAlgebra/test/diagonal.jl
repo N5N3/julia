@@ -1133,4 +1133,9 @@ Base.size(::SMatrix1) = (1, 1)
     @test C isa Matrix{SMatrix1{String}}
 end
 
+@testset "structure copyto!" begin
+    @test copyto!(Diagonal(zeros(4)), Diagonal(1:4)) == Diagonal(1:4)
+    @test_throws ArgumentError copyto!(Diagonal(zeros(4)), Diagonal(1:3))
+end
+
 end # module TestDiagonal

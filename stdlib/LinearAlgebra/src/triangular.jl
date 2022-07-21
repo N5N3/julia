@@ -434,23 +434,18 @@ tr(A::UpperTriangular) = tr(A.data)
 tr(A::UnitUpperTriangular) = size(A, 1) * oneunit(eltype(A))
 
 # copy and scale
-function copyto!(A::T, B::T) where T<:Union{UpperTriangular,UnitUpperTriangular}
-    n = size(B,1)
-    for j = 1:n
-        for i = 1:(isa(B, UnitUpperTriangular) ? j-1 : j)
-            @inbounds A[i,j] = B[i,j]
+for T in (:UpperTriangular, :LowerTriangular), MT in (T, Symbol(:Unit,T))
+    skip = T !== MT
+    ax1 = T === :UpperTriangular ? :(1:j - $skip) : :(j + $skip:n)
+    @eval function copyto!(A::$MT, B::$MT)
+        size(A) == size(B) || return general_copyto!(A, B)
+        B′ = Base.unalias(A, B)
+        n = size(B, 1)
+        for j = 1:n, i = $ax1
+            @inbounds A[i,j] = B′[i,j]
         end
+        return A
     end
-    return A
-end
-function copyto!(A::T, B::T) where T<:Union{LowerTriangular,UnitLowerTriangular}
-    n = size(B,1)
-    for j = 1:n
-        for i = (isa(B, UnitLowerTriangular) ? j+1 : j):n
-            @inbounds A[i,j] = B[i,j]
-        end
-    end
-    return A
 end
 
 # Define `mul!` for (Unit){Upper,Lower}Triangular matrices times a

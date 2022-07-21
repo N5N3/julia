@@ -285,18 +285,20 @@ copy(A::Hermitian{T,S}) where {T,S} = (B = copy(A.data); Hermitian{T,typeof(B)}(
 
 function copyto!(dest::Symmetric, src::Symmetric)
     if src.uplo == dest.uplo
+        size(dest) == size(src) || throw(DimensionMismatch(lazy"dimensions must match: dest has dims $(size(dest)), src has dims $(size(src))"))
         copyto!(dest.data, src.data)
     else
-        transpose!(dest.data, src.data)
+        transpose!(dest.data, Base.unalias(dest.data, src.data))
     end
     return dest
 end
 
 function copyto!(dest::Hermitian, src::Hermitian)
     if src.uplo == dest.uplo
+        size(dest) == size(src) || throw(DimensionMismatch(lazy"dimensions must match: dest has dims $(size(dest)), src has dims $(size(src))"))
         copyto!(dest.data, src.data)
     else
-        adjoint!(dest.data, src.data)
+        adjoint!(dest.data, Base.unalias(dest.data, src.data))
     end
     return dest
 end

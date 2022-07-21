@@ -58,6 +58,7 @@ for elty1 in (Float32, Float64, BigFloat, ComplexF32, ComplexF64, Complex{BigFlo
         simA1 = similar(A1)
         copyto!(simA1, A1)
         @test simA1 == A1
+        @test_throws ArgumentError copyto!(simA1, t1(reshape(1:25, 5, 5)))
 
         # getindex
         let mA1 = Matrix(A1)
