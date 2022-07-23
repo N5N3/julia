@@ -116,7 +116,7 @@ check-whitespace:
 ifneq ($(NO_GIT), 1)
 	@# Append the directory containing the julia we just built to the end of `PATH`,
 	@# to give us the best chance of being able to run this check.
-	@PATH="$(PATH):$(dir $(JULIA_EXECUTABLE))" $(JULIAHOME)/contrib/check-whitespace.jl
+	@PATH="$(PATH):$(dir $(JULIA_EXECUTABLE))" $(call cygpath_w,$(JULIAHOME))/contrib/check-whitespace.jl
 else
 	$(warn "Skipping whitespace check because git is unavailable")
 endif
@@ -347,9 +347,9 @@ else ifeq ($(JULIA_BUILD_MODE),debug)
 endif
 
 	# Cache stdlibs
-	@$(call PRINT_JULIA, $(call spawn,$(JULIA_EXECUTABLE)) --startup-file=no $(JULIAHOME)/contrib/cache_stdlibs.jl)
+	@$(call PRINT_JULIA, $(call spawn,$(JULIA_EXECUTABLE)) --startup-file=no $(call cygpath_w,$(JULIAHOME))/contrib/cache_stdlibs.jl)
 	# CI uses `--check-bounds=yes` which impacts the cache flags
-	@$(call PRINT_JULIA, $(call spawn,$(JULIA_EXECUTABLE)) --startup-file=no --check-bounds=yes $(JULIAHOME)/contrib/cache_stdlibs.jl)
+	@$(call PRINT_JULIA, $(call spawn,$(JULIA_EXECUTABLE)) --startup-file=no --check-bounds=yes $(call cygpath_w,$(JULIAHOME))/contrib/cache_stdlibs.jl)
 
 	# Copy in all .jl sources as well
 	mkdir -p $(DESTDIR)$(datarootdir)/julia/base $(DESTDIR)$(datarootdir)/julia/test
