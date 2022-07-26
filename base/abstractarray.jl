@@ -2428,7 +2428,7 @@ end
 
 function _typed_hvncat(T::Type, dims::NTuple{N, Int}, row_first::Bool, as...) where {N}
     # function barrier after calculating the max is necessary for high performance
-    nd = max(maximum(cat_ndims(a) for a ∈ as), N)
+    nd = max(maximum(cat_ndims, as), N)
     return _typed_hvncat_dims(T, (dims..., ntuple(x -> 1, nd - N)...), row_first, as)
 end
 
@@ -2503,12 +2503,13 @@ function _typed_hvncat_dims(::Type{T}, dims::NTuple{N, Int}, row_first::Bool, as
         end
     end
 
-    outlen = prod(outdims)
+    outdims′ = Dims{N}(outdims)
+    outlen = prod(outdims′)
     elementcount == outlen ||
         throw(ArgumentError("mismatched number of elements; expected $(outlen), got $(elementcount)"))
 
     # copy into final array
-    A = cat_similar(as[1], T, outdims)
+    A = cat_similar(as[1], T, outdims′)
     # @assert all(==(0), currentdims)
     outdims .= 0
     hvncat_fill!(A, currentdims, outdims, d1, d2, as)
@@ -2526,7 +2527,7 @@ end
 
 function _typed_hvncat(T::Type, shape::NTuple{N, Tuple}, row_first::Bool, as...) where {N}
     # function barrier after calculating the max is necessary for high performance
-    nd = max(maximum(cat_ndims(a) for a ∈ as), N)
+    nd = max(maximum(cat_ndims, as), N)
     return _typed_hvncat_shape(T, (shape..., ntuple(x -> shape[end], nd - N)...), row_first, as)
 end
 
@@ -2590,19 +2591,20 @@ function _typed_hvncat_shape(::Type{T}, shape::NTuple{N, Tuple}, row_first, as::
         end
     end
 
-    outlen = prod(outdims)
-    elementcount == outlen ||
-        throw(ArgumentError("mismatched number of elements; expected $(outlen), got $(elementcount)"))
-
     if row_first
         outdims[1], outdims[2] = outdims[2], outdims[1]
     end
+    outdims′ = Dims{nd}(outdims)
+
+    outlen = prod(outdims′)
+    elementcount == outlen ||
+        throw(ArgumentError("mismatched number of elements; expected $(outlen), got $(elementcount)"))
 
     # @assert all(==(0), currentdims)
     # @assert all(==(0), blockcounts)
 
     # copy into final array
-    A = cat_similar(as[1], T, outdims)
+    A = cat_similar(as[1], T, outdims′)
     hvncat_fill!(A, currentdims, blockcounts, d1, d2, as)
     return A
 end
