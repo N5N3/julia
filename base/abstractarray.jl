@@ -691,12 +691,11 @@ end
 # Linear indexing is explicitly allowed when there is only one (non-cartesian) index
 function checkbounds(::Type{Bool}, A::AbstractArray, i)
     @inline
-    checkindex(Bool, eachindex(IndexLinear(), A), i)
-end
-# As a special extension, allow using logical arrays that match the source array exactly
-function checkbounds(::Type{Bool}, A::AbstractArray{<:Any,N}, I::AbstractArray{Bool,N}) where N
-    @inline
-    axes(A) == axes(I)
+    if ndims_cartesian_index(i) === nothing
+        return checkindex(Bool, eachindex(IndexLinear(), A), i)
+    else
+        return checkbounds_indices(Bool, axes(A), (i,))
+    end
 end
 
 """
@@ -730,19 +729,23 @@ of `IA`.
 
 See also [`checkbounds`](@ref).
 """
-function checkbounds_indices(::Type{Bool}, IA::Tuple, I::Tuple)
+function checkbounds_indices(::Type{Bool}, inds::Tuple, I::Tuple)
     @inline
-    checkindex(Bool, IA[1], I[1])::Bool & checkbounds_indices(Bool, tail(IA), tail(I))
+    if (N = ndims_cartesian_index(I[1])) === nothing
+        inds₁ = get(inds, 1, OneTo(1))
+        rest = safe_tail(inds)
+    else
+        inds₁, rest = IteratorsMD.split(inds, N)
+    end
+    return checkindex(Bool, inds₁, I[1])::Bool & checkbounds_indices(Bool, rest, tail(I))
 end
-function checkbounds_indices(::Type{Bool}, ::Tuple{}, I::Tuple)
-    @inline
-    checkindex(Bool, OneTo(1), I[1])::Bool & checkbounds_indices(Bool, (), tail(I))
-end
-checkbounds_indices(::Type{Bool}, IA::Tuple, ::Tuple{}) = (@inline; all(x->length(x)==1, IA))
+
+checkbounds_indices(::Type{Bool}, inds::Tuple, ::Tuple{}) = (@inline; all(map(isone∘length, inds)))
 checkbounds_indices(::Type{Bool}, ::Tuple{}, ::Tuple{}) = true
 
-throw_boundserror(A, I) = (@noinline; throw(BoundsError(A, I)))
+ndims_cartesian_index(::Any) = nothing # indexes are non-cartesian by default
 
+throw_boundserror(A, I) = (@noinline; throw(BoundsError(A, I)))
 # check along a single dimension
 """
     checkindex(Bool, inds::AbstractUnitRange, index)
@@ -763,22 +766,24 @@ julia> checkindex(Bool, 1:20, 21)
 false
 ```
 """
-checkindex(::Type{Bool}, inds::AbstractUnitRange, i) =
-    throw(ArgumentError("unable to check bounds for indices of type $(typeof(i))"))
-checkindex(::Type{Bool}, inds::AbstractUnitRange, i::Real) = (first(inds) <= i) & (i <= last(inds))
-checkindex(::Type{Bool}, inds::AbstractUnitRange, ::Colon) = true
-checkindex(::Type{Bool}, inds::AbstractUnitRange, ::Slice) = true
-function checkindex(::Type{Bool}, inds::AbstractUnitRange, r::AbstractRange)
-    @_propagate_inbounds_meta
-    isempty(r) | (checkindex(Bool, inds, first(r)) & checkindex(Bool, inds, last(r)))
-end
-checkindex(::Type{Bool}, indx::AbstractUnitRange, I::AbstractVector{Bool}) = indx == axes1(I)
-checkindex(::Type{Bool}, indx::AbstractUnitRange, I::AbstractArray{Bool}) = false
-function checkindex(::Type{Bool}, inds::AbstractUnitRange, I::AbstractArray)
+checkindex(::Type{Bool}, ind::AbstractUnitRange, I::Real) = (first(ind) <= I) & (I <= last(ind))
+checkindex(::Type{Bool}, ind::AbstractUnitRange, ::Colon) = true
+checkindex(::Type{Bool}, ind::AbstractUnitRange, ::Slice) = true
+checkindex(::Type{Bool}, ind::AbstractUnitRange, I::AbstractRange) =
+    isempty(I) | (checkindex(Bool, ind, first(I)) & checkindex(Bool, ind, last(I)))
+# range like indices with cheap `extrema`
+checkindex(::Type{Bool}, ind::AbstractUnitRange, I::LinearIndices) =
+    isempty(I) | (checkindex(Bool, ind, first(I)) & checkindex(Bool, ind, last(I)))
+
+checkindex(::Type{Bool}, ind::AbstractUnitRange, I::AbstractVector{Bool}) = axes1(I) == ind
+checkindex(::Type{Bool}, ind::AbstractUnitRange, I::AbstractRange{Bool}) = axes1(I) == ind
+
+checkindex(::Type{Bool}, ind::AbstractUnitRange, i) = throw(ArgumentError("unable to check bounds for indices of type $(typeof(i))"))
+function checkindex(::Type{Bool}, ind::AbstractUnitRange, I::AbstractArray)
     @inline
     b = true
     for i in I
-        b &= checkindex(Bool, inds, i)
+        b &= checkindex(Bool, ind, i)::Bool
     end
     b
 end

@@ -349,15 +349,19 @@ to_indices(A, I::Tuple{}) = ()
 to_indices(A, I::Tuple{Vararg{Int}}) = I
 to_indices(A, I::Tuple{Vararg{Integer}}) = (@inline; to_indices(A, (), I))
 to_indices(A, inds, ::Tuple{}) = ()
-function to_indices(A, inds, I::Tuple{Any, Vararg{Any}})
+function to_indices(A, inds, I::Tuple)
     @inline
-    head = _to_indices1(A, inds, I[1])
-    rest = to_indices(A, _cutdim(inds, I[1]), tail(I))
+    head = _to_indices(A, inds, I)
+    rest = to_indices(A, _cutdims(inds, head), tail(I))
     (head..., rest...)
 end
 
-_to_indices1(A, inds, I1) = (to_index(A, I1),)
-_cutdim(inds, I1) = safe_tail(inds)
+_to_indices(A, inds, @nospecialize(I::Tuple)) = _to_indices1(A, inds, I[1])
+_to_indices1(A, inds, @nospecialize(I)) = (to_index(A, I),)
+
+_cutdims(inds, idxs::Tuple) = _cutdims(_cutdim(inds, idxs[1]), tail(idxs))
+_cutdims(inds, ::Tuple{}) = inds
+_cutdim(inds, ::Any) = safe_tail(inds)
 
 """
     Slice(indices)
