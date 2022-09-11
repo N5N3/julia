@@ -1018,7 +1018,7 @@ function typeinf_ext(interp::AbstractInterpreter, mi::MethodInstance)
                 tree.pure = true
                 set_inlineable!(tree, true)
                 tree.parent = mi
-                tree.rettype = Core.Typeof(rettype_const)
+                tree.rettype = TypeofValid(rettype_const)
                 tree.min_world = code.min_world
                 tree.max_world = code.max_world
                 return tree
