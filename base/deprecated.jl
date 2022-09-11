@@ -210,7 +210,7 @@ macro deprecate(old, new, export_old=true)
             maybe_export,
             :($(esc(old)) = begin
                   $meta
-                  depwarn($"`$oldcall` is deprecated, use `$newcall` instead.", Core.Typeof($(esc(fnexpr))).name.mt.name)
+                  depwarn($"`$oldcall` is deprecated, use `$newcall` instead.", Base.TypeofValid($(esc(fnexpr))).name.mt.name)
                   $(esc(new))
               end))
     else
@@ -221,7 +221,7 @@ macro deprecate(old, new, export_old=true)
             export_old ? Expr(:export, esc(old)) : nothing,
             :(function $(esc(old))(args...; kwargs...)
                   $meta
-                  depwarn($"`$old` is deprecated, use `$new` instead.", Core.Typeof($(esc(old))).name.mt.name)
+                  depwarn($"`$old` is deprecated, use `$new` instead.", Base.TypeofValid($(esc(old))).name.mt.name)
                   $(esc(new))(args...; kwargs...)
               end))
     end

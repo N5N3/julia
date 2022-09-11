@@ -847,8 +847,8 @@ extrema(f, itr; kw...) = mapreduce(ExtremaMap(f), _extrema_rf, itr; kw...)
 # to avoid type-instability (#23618).
 struct ExtremaMap{F} <: Function
     f::F
+    ExtremaMap(@nospecialize(f)) = new{TypeofValid(f)}(f)
 end
-ExtremaMap(::Type{T}) where {T} = ExtremaMap{Type{T}}(T)
 @inline (f::ExtremaMap)(x) = (y = f.f(x); (y, y))
 
 @inline _extrema_rf((min1, max1), (min2, max2)) = (min(min1, min2), max(max1, max2))

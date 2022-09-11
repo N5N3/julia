@@ -205,7 +205,7 @@ function showerror(io::IO, ex::CanonicalIndexError)
     print(io, "CanonicalIndexError: ", ex.func, " not defined for ", ex.type)
 end
 
-typesof(@nospecialize args...) = Tuple{Any[Core.Typeof(arg) for arg in args]...}
+typesof(@nospecialize args...) = Tuple{Any[Base.TypeofValid(arg) for arg in args]...}
 
 function print_with_compare(io::IO, @nospecialize(a::DataType), @nospecialize(b::DataType), color::Symbol)
     if a.name === b.name

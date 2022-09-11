@@ -763,7 +763,7 @@ function recursive_explore_names!(seen::IdSet, callee_module::Module, initial_mo
         if !Base.isdeprecated(callee_module, name) && !startswith(string(name), '#') && isdefined(initial_module, name)
             func = getfield(callee_module, name)
             if !isa(func, Module)
-                funct = Core.Typeof(func)
+                funct = Base.TypeofValid(func)
                 push!(seen, funct)
             elseif isa(func, Module) && func ∉ exploredmodules
                 recursive_explore_names!(seen, func, initial_module, exploredmodules)

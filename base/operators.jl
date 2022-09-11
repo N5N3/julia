@@ -971,9 +971,6 @@ julia> [0 1; 2 3] .|> (x -> x^2) |> sum
 """
 |>(x, f) = f(x)
 
-_stable_typeof(x) = typeof(x)
-_stable_typeof(::Type{T}) where {T} = @isdefined(T) ? Type{T} : DataType
-
 """
     f = Returns(value)
 
@@ -1000,7 +997,7 @@ julia> f.value
 struct Returns{V} <: Function
     value::V
     Returns{V}(value) where {V} = new{V}(value)
-    Returns(value) = new{_stable_typeof(value)}(value)
+    Returns(value) = new{TypeofValid(value)}(value)
 end
 
 (obj::Returns)(@nospecialize(args...); @nospecialize(kw...)) = obj.value
@@ -1090,7 +1087,7 @@ struct ComposedFunction{O,I} <: Function
     outer::O
     inner::I
     ComposedFunction{O, I}(outer, inner) where {O, I} = new{O, I}(outer, inner)
-    ComposedFunction(outer, inner) = new{Core.Typeof(outer),Core.Typeof(inner)}(outer, inner)
+    ComposedFunction(outer, inner) = new{TypeofValid(outer),TypeofValid(inner)}(outer, inner)
 end
 
 (c::ComposedFunction)(x...; kw...) = call_composed(unwrap_composed(c), x, kw)
@@ -1174,13 +1171,13 @@ struct Fix{N,F,T} <: Function
     f::F
     x::T
 
-    function Fix{N}(f::F, x) where {N,F}
+    function Fix{N}(f, x) where {N}
         if !(N isa Int)
             throw(ArgumentError(LazyString("expected type parameter in `Fix` to be `Int`, but got `", N, "::", typeof(N), "`")))
         elseif N < 1
             throw(ArgumentError(LazyString("expected `N` in `Fix{N}` to be integer greater than 0, but got ", N)))
         end
-        new{N,_stable_typeof(f),_stable_typeof(x)}(f, x)
+        new{N,TypeofValid(f),TypeofValid(x)}(f, x)
     end
 end
 
@@ -1336,7 +1333,7 @@ See also [`splat`](@ref).
 """
 struct Splat{F} <: Function
     f::F
-    Splat(f) = new{Core.Typeof(f)}(f)
+    Splat(f) = new{TypeofValid(f)}(f)
 end
 (s::Splat)(args) = s.f(args...)
 show(io::IO, s::Splat) = (print(io, "splat("); show(io, s.f); print(io, ")"))
