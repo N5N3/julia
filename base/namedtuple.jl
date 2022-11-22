@@ -250,6 +250,7 @@ same_names(::NamedTuple...) = false
 
 # NOTE: this method signature makes sure we don't define map(f)
 function map(f, nt::NamedTuple{names}, nts::NamedTuple...) where names
+    @inline
     if !same_names(nt, nts...)
         throw(ArgumentError("Named tuple names do not match."))
     end
