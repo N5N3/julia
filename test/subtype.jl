@@ -1691,9 +1691,7 @@ CovType{T} = Union{AbstractArray{T,2},
 # issue #31703
 @testintersect(Pair{<:Any, Ref{Tuple{Ref{Ref{Tuple{Int}}},Ref{Float64}}}},
                Pair{T, S} where S<:(Ref{A} where A<:(Tuple{C,Ref{T}} where C<:(Ref{D} where D<:(Ref{E} where E<:Tuple{FF}) where FF<:B)) where B) where T,
-               Pair{T, Ref{Tuple{Ref{Ref{Tuple{Int}}},Ref{Float64}}}} where T)
-# TODO: should be able to get this result
-#              Pair{Float64, Ref{Tuple{Ref{Ref{Tuple{Int}}},Ref{Float64}}}}
+               Pair{Float64, Ref{Tuple{Ref{Ref{Tuple{Int}}},Ref{Float64}}}})
 
 module I31703
 using Test, LinearAlgebra
@@ -1745,8 +1743,7 @@ end
                Tuple{Type{SA{2, L}}, Type{SA{2, L}}} where L)
 @testintersect(Tuple{Type{SA{2, L}}, Type{SA{2, 16}}} where L,
                Tuple{Type{<:SA{N, L}}, Type{<:SA{N, L}}} where {N,L},
-               # TODO: this could be narrower
-               Tuple{Type{SA{2, L}}, Type{SA{2, 16}}} where L)
+               Tuple{Type{SA{2, 16}}, Type{SA{2, 16}}})
 
 # issue #31993
 @testintersect(Tuple{Type{<:AbstractVector{T}}, Int} where T,
@@ -1851,9 +1848,9 @@ c32703(::Type{<:Str{C}}, str::Str{C}) where {C<:CSE} = str
                Tuple{Type{<:Str{C}}, Str{C}} where {C<:CSE},
                Union{})
 @test c32703(UTF16Str, ASCIIStr()) == 42
-@test_broken typeintersect(Tuple{Vector{Vector{Float32}},Matrix,Matrix},
-                           Tuple{Vector{V},Matrix{Int},Matrix{S}} where {S, V<:AbstractVector{S}}) ==
-             Tuple{Array{Array{Float32,1},1},Array{Int,2},Array{Float32,2}}
+@testintersect(Tuple{Vector{Vector{Float32}},Matrix,Matrix},
+               Tuple{Vector{V},Matrix{Int},Matrix{S}} where {S, V<:AbstractVector{S}},
+               Tuple{Array{Array{Float32,1},1},Array{Int,2},Array{Float32,2}})
 
 @testintersect(Tuple{Pair{Int, DataType}, Any},
                Tuple{Pair{A, B} where B<:Type, Int} where A,
@@ -2469,6 +2466,11 @@ end
 abstract type P47654{A} end
 @test Wrapper47654{P47654, Vector{Union{P47654,Nothing}}} <: Wrapper47654
 
+#issue 41561
+@testintersect(Tuple{Vector{VT}, Vector{VT}} where {N1, VT<:AbstractVector{N1}},
+               Tuple{Vector{VN} where {N, VN<:AbstractVector{N}}, Vector{Vector{Float64}}},
+               Tuple{Vector{Vector{Float64}}, Vector{Vector{Float64}}})
+
 @testset "known subtype/intersect issue" begin
     #issue 45874
     let S = Pair{Val{P}, AbstractVector{<:Union{P,<:AbstractMatrix{P}}}} where P,
@@ -2476,9 +2478,6 @@ abstract type P47654{A} end
         @test S <: T
     end
 
-    #issue 41561
-    @test_broken typeintersect(Tuple{Vector{VT}, Vector{VT}} where {N1, VT<:AbstractVector{N1}},
-                Tuple{Vector{VN} where {N, VN<:AbstractVector{N}}, Vector{Vector{Float64}}}) !== Union{}
     #issue 40865
     @test Tuple{Set{Ref{Int}}, Set{Ref{Int}}} <: Tuple{Set{KV}, Set{K}} where {K,KV<:Union{K,Ref{K}}}
     @test Tuple{Set{Val{Int}}, Set{Val{Int}}} <: Tuple{Set{KV}, Set{K}} where {K,KV<:Union{K,Val{K}}}
@@ -2721,3 +2720,21 @@ let T1 = NTuple{12, Union{Val{1}, Val{2}, Val{3}, Val{4}, Val{5}, Val{6}}}
     @test !(T1 <: T2)
     @test Tuple{Union{Val{1},Val{2}}} <: Tuple{S} where {T, S<:Val{T}}
 end
+
+# test equality of concrete covariant var.
+@testintersect(Tuple{I,I,Any} where {I},      Tuple{I,Any,I} where {I},       Tuple{I,I,I} where {I})
+@testintersect(Tuple{I,I,Any} where {I>:Int}, Tuple{Any,I,I} where {I},       Tuple{I,I,I} where {I>:Int})
+@testintersect(Tuple{I,Any,I} where {I>:Int}, Tuple{Any,I,I} where {I<:Real}, Tuple{I,I,I} where {Int<:I<:Real})
+@testintersect(Tuple{I,I,Any} where {I>:Int}, Tuple{I,Any,I} where {I>:Int8}, Union{})
+@testintersect(Tuple{I,I,Real} where {I},     Tuple{Integer,I,I} where {I},   Tuple{I,I,I} where {I<:Integer})
+
+@testintersect(Tuple{I,I,S} where {S,I},       Tuple{I,S,I} where {S,I},       Tuple{I,I,I} where {I})
+@testintersect(Tuple{I,I,S} where {S,I>:Int},  Tuple{S,I,I} where {S,I},       Tuple{I,I,I} where {I>:Int})
+@testintersect(Tuple{I,S,I} where {S,I>:Int},  Tuple{S,I,I} where {S,I<:Real}, Tuple{I,I,I} where {Int<:I<:Real})
+@testintersect(Tuple{I,I,S} where {S,I>:Int},  Tuple{I,S,I} where {S,I>:Int8}, Union{})
+# TODO: This should be narrower.
+@testintersect(Tuple{I,I,S} where {S<:Real,I}, Tuple{S,I,I} where {S>:Int,I},  Tuple{I,I,I} where {I<:Real})
+
+@testintersect(Val{S} where {I,S<:Tuple{I,I,Any}},      Val{S} where {I,S<:Tuple{I,Any,I}},       Val{S} where {I,S<:Tuple{I,I,I}})
+@testintersect(Val{S} where {I>:Int,S<:Tuple{I,I,Any}}, Val{S} where {I,S<:Tuple{I,Any,I}},       Val{S} where {I>:Int,S<:Tuple{I,I,I}})
+@testintersect(Val{S} where {I>:Int,S<:Tuple{I,I,Any}}, Val{S} where {I<:Real,S<:Tuple{I,Any,I}}, Val{S} where {Int<:I<:Real,S<:Tuple{I,I,I}})

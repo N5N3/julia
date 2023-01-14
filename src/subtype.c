@@ -113,6 +113,7 @@ typedef struct jl_stenv_t {
     int intersection;         // true iff subtype is being called from intersection
     int emptiness_only;       // true iff intersection only needs to test for emptiness
     int triangular;           // when intersecting Ref{X} with Ref{<:Y}
+    int concrete_covariant;   // when intersecting 2 concrete covariant typevar
     // Used to represent the length difference between 2 vararg.
     // intersect(X, Y) ==> X = Y + Loffset
     int Loffset;
@@ -1787,6 +1788,7 @@ static void init_stenv(jl_stenv_t *e, jl_value_t **env, int envsz)
     e->intersection = 0;
     e->emptiness_only = 0;
     e->triangular = 0;
+    e->concrete_covariant = 0;
     e->Loffset = 0;
     e->Lunions.depth = 0;      e->Runions.depth = 0;
     e->Lunions.more = 0;       e->Runions.more = 0;
@@ -2656,31 +2658,22 @@ static void set_bound(jl_value_t **bound, jl_value_t *val, jl_tvar_t *v, jl_sten
 // subtype, treating all vars as existential
 static int subtype_in_env_existential(jl_value_t *x, jl_value_t *y, jl_stenv_t *e, jl_savedenv_t *se, int resave)
 {
-    jl_varbinding_t *v = e->vars;
-    int len = 0;
     if (x == jl_bottom_type || y == (jl_value_t*)jl_any_type)
         return 1;
-    while (v != NULL) {
-        len++;
-        v = v->prev;
-    }
-    int8_t *rs = (int8_t*)malloc_s(len);
+    int8_t *rs = (int8_t*)alloca(current_env_length(e));
+    jl_varbinding_t *v = e->vars;
     int n = 0;
-    v = e->vars;
-    while (n < len) {
-        assert(v != NULL);
+    while (v != NULL) {
         rs[n++] = v->right;
         v->right = 1;
         v = v->prev;
     }
     int issub = subtype_in_env(x, y, e, se, resave);
     n = 0; v = e->vars;
-    while (n < len) {
-        assert(v != NULL);
+    while (v != NULL) {
         v->right = rs[n++];
         v = v->prev;
     }
-    free(rs);
     return issub;
 }
 
@@ -2728,6 +2721,8 @@ static int check_unsat_bound(jl_value_t *t, jl_tvar_t *v, jl_stenv_t *e) JL_NOTS
 }
 
 
+static int intersect_var_ccheck_in_env(jl_value_t *xlb, jl_value_t *xub, jl_value_t *ylb, jl_value_t *yub, jl_stenv_t *e, int flip);
+
 static jl_value_t *intersect_var(jl_tvar_t *b, jl_value_t *a, jl_stenv_t *e, int8_t R, int param)
 {
     jl_varbinding_t *bb = lookup(e, b);
@@ -2740,24 +2735,13 @@ static jl_value_t *intersect_var(jl_tvar_t *b, jl_value_t *a, jl_stenv_t *e, int
     if (!jl_is_type(a) && !jl_is_typevar(a))
         return set_var_to_const(bb, a, e, R);
     if (param == 2) {
-        jl_savedenv_t se, se2;
         jl_value_t *ub = NULL;
         JL_GC_PUSH1(&ub);
         if (!jl_has_free_typevars(a)) {
-            int tryfuse = may_contain_union_decision(bb->lb, e, NULL) || may_contain_union_decision(a, e, NULL);
-            save_env(e, &se, 1);
-            if (tryfuse)
-                alloc_env(e, &se2, 1);
-            int issub = subtype_in_env_existential(bb->lb, a, e, tryfuse ? &se2 : &se, tryfuse);
-            restore_env(e, &se, 1);
-            if (issub) {
-                issub = subtype_in_env_existential(a, bb->ub, e, tryfuse ? &se2 : &se, tryfuse);
-                restore_env(e, &se, 1);
-            }
-            if (tryfuse)
-                free_env(&se2);
-            free_env(&se);
-            if (!issub) {
+            if (R) flip_offset(e);
+            int ccheck = intersect_var_ccheck_in_env(bb->lb, bb->ub, a, a, e, !R);
+            if (R) flip_offset(e);
+            if (!ccheck) {
                 JL_GC_POP();
                 return jl_bottom_type;
             }
@@ -2767,6 +2751,7 @@ static jl_value_t *intersect_var(jl_tvar_t *b, jl_value_t *a, jl_stenv_t *e, int
             e->triangular++;
             ub = R ? intersect_aside(a, bb->ub, e, bb->depth0) : intersect_aside(bb->ub, a, e, bb->depth0);
             e->triangular--;
+            jl_savedenv_t se;
             save_env(e, &se, 1);
             int issub = subtype_in_env_existential(bb->lb, ub, e, &se, 0);
             restore_env(e, &se, 1);
@@ -2830,6 +2815,17 @@ static jl_value_t *intersect_var(jl_tvar_t *b, jl_value_t *a, jl_stenv_t *e, int
     //JL_GC_POP();
     //bb->lb = lb;
     return ub;
+}
+
+static jl_value_t *intersect_concrete_covariant_var(jl_tvar_t *x, jl_tvar_t *y, jl_stenv_t *e)
+{
+    // treat them as invariant var (as we want to set them equal.)
+    assert(e->Loffset == 0);
+    e->concrete_covariant = 1;
+    jl_value_t *res = intersect((jl_value_t *)x, (jl_value_t *)y, e, 1);
+    e->concrete_covariant = 0;
+    assert(e->Loffset == 0);
+    return res == jl_bottom_type ? res : (jl_value_t *)x;
 }
 
 // test whether `var` occurs inside constructors. `want_inv` tests only inside
@@ -2906,8 +2902,8 @@ static jl_value_t *omit_bad_union(jl_value_t *u, jl_tvar_t *t)
                 }
                 res = jl_new_struct(jl_unionall_type, var, body);
             }
+            JL_GC_POP();
         }
-        JL_GC_POP();
     }
     else if (jl_is_uniontype(u)) {
         jl_value_t *a = ((jl_uniontype_t *)u)->a;
@@ -3357,7 +3353,24 @@ static jl_value_t *intersect_unionall_(jl_value_t *t, jl_unionall_t *u, jl_stenv
         if (jl_is_typevar(vb->lb)) {
         }
         else if (!is_leaf_bound(vb->lb)) {
-            res = jl_bottom_type;
+            JL_GC_PUSH1(&res);
+            res = omit_bad_union(res, u->var);
+            if (res != jl_bottom_type) {
+                jl_varbinding_t *btemp = e->vars;
+                while (btemp != NULL) {
+                    if (jl_has_typevar(btemp->lb, u->var)) {
+                        res = jl_bottom_type;
+                        break;
+                    }
+                    btemp->ub = omit_bad_union(btemp->ub, u->var);
+                    if (btemp->ub == jl_bottom_type && btemp->ub != btemp->lb) {
+                        res = jl_bottom_type;
+                        break;
+                    }
+                    btemp = btemp->prev;
+                }
+            }
+            JL_GC_POP();
         }
     }
 
@@ -3850,6 +3863,95 @@ static int subtype_by_bounds(jl_value_t *x, jl_value_t *y, jl_stenv_t *e) JL_NOT
     return compareto_var(x, (jl_tvar_t*)y, e, -1) || compareto_var(y, (jl_tvar_t*)x, e, 1);
 }
 
+static int intersect_var_ccheck_in_env(jl_value_t *xlb, jl_value_t *xub, jl_value_t *ylb, jl_value_t *yub, jl_stenv_t *e, int flip)
+{
+    int easy_check1 = xlb == jl_bottom_type ||
+                      yub == (jl_value_t *)jl_any_type ||
+                      (e->Loffset == 0 && obviously_in_union(yub, xlb));
+    int easy_check2 = ylb == jl_bottom_type ||
+                      xub == (jl_value_t *)jl_any_type ||
+                      (e->Loffset == 0 && obviously_in_union(xub, ylb));
+    int nofree1 = 0, nofree2 = 0;
+    if (!easy_check1) {
+        nofree1 = !jl_has_free_typevars(xlb) && !jl_has_free_typevars(yub);
+        if (nofree1 && e->Loffset == 0) {
+            easy_check1 = jl_subtype(xlb, yub);
+            if (!easy_check1)
+                return 0;
+        }
+    }
+    if (!easy_check2) {
+        nofree2 = !jl_has_free_typevars(ylb) && !jl_has_free_typevars(xub);
+        if (nofree2 && e->Loffset == 0) {
+            easy_check2 = jl_subtype(ylb, xub);
+            if (!easy_check2)
+                return 0;
+        }
+    }
+    if (easy_check1 && easy_check2)
+        return 1;
+    int ccheck = 0;
+    if ((easy_check1 || nofree1) && (easy_check2 || nofree2)) {
+        jl_varbinding_t *vars = e->vars;
+        e->vars = NULL;
+        ccheck = easy_check1 || subtype_in_env(xlb, yub, e, NULL, 0);
+        if (ccheck && !easy_check2) {
+            flip_offset(e);
+            ccheck = subtype_in_env(ylb, xub, e, NULL, 0);
+            flip_offset(e);
+        }
+        e->vars = vars;
+        return ccheck;
+    }
+    jl_savedenv_t se, se2;
+    int tryfuse = (!easy_check1 && may_contain_union_decision(xlb, e, NULL)) ||
+                  (!easy_check2 && may_contain_union_decision(ylb, e, NULL));
+    save_env(e, &se, 1);
+    if (tryfuse)
+        alloc_env(e, &se2, 1);
+    // first try normal flip.
+    if (flip) flip_vars(e);
+    ccheck = easy_check1 || subtype_in_env(xlb, yub, e, tryfuse ? &se2 : &se, tryfuse);
+    if (ccheck && !easy_check2) {
+        flip_offset(e);
+        ccheck = subtype_in_env(ylb, xub, e, tryfuse ? &se2 : &se, tryfuse);
+        flip_offset(e);
+    }
+    if (flip) flip_vars(e);
+    if (!ccheck) {
+        // then try reverse flip.
+        restore_env(e, &se, 1);
+        if (!flip) flip_vars(e);
+        ccheck = easy_check1 || subtype_in_env(xlb, yub, e, tryfuse ? &se2 : &se, tryfuse);
+        if (ccheck && !easy_check2) {
+            flip_offset(e);
+            ccheck = subtype_in_env(ylb, xub, e, tryfuse ? &se2 : &se, tryfuse);
+            flip_offset(e);
+        }
+        if (!flip) flip_vars(e);
+    }
+    if (!ccheck) {
+        // then try existential.
+        restore_env(e, &se, 1);
+        if (easy_check1)
+            ccheck = 1;
+        else {
+            ccheck = subtype_in_env_existential(xlb, yub, e, tryfuse ? &se2 : &se, tryfuse);
+            restore_env(e, &se, 1);
+        }
+        if (ccheck && !easy_check2) {
+            flip_offset(e);
+            ccheck = subtype_in_env_existential(ylb, xub, e, tryfuse ? &se2 : &se, tryfuse);
+            flip_offset(e);
+            restore_env(e, &se, 1);
+        }
+    }
+    if (tryfuse)
+        free_env(&se2);
+    free_env(&se);
+    return ccheck;
+}
+
 static int has_typevar_via_env(jl_value_t *x, jl_tvar_t *t, jl_stenv_t *e)
 {
     if (e->Loffset == 0) {
@@ -3888,7 +3990,7 @@ static jl_value_t *intersect(jl_value_t *x, jl_value_t *y, jl_stenv_t *e, int pa
                 tvb = xx; xx = yy; yy = tvb;
                 R = 1;
             }
-            if (param == 2) {
+            if (param == 2 || e->concrete_covariant) {
                 jl_value_t *xlb = xx ? xx->lb : ((jl_tvar_t*)x)->lb;
                 jl_value_t *xub = xx ? xx->ub : ((jl_tvar_t*)x)->ub;
                 jl_value_t *ylb = yy ? yy->lb : ((jl_tvar_t*)y)->lb;
@@ -3982,17 +4084,8 @@ static jl_value_t *intersect(jl_value_t *x, jl_value_t *y, jl_stenv_t *e, int pa
                     ccheck = 1;
                 }
                 else {
-                    jl_savedenv_t se;
-                    alloc_env(e, &se, 1);
-                    if (R) flip_vars(e);
-                    ccheck = subtype_in_env(xlb, yub, e, &se, 1);
-                    if (ccheck) {
-                        flip_offset(e);
-                        ccheck = subtype_in_env(ylb, xub, e, &se, 1);
-                        flip_offset(e);
-                    }
-                    if (R) flip_vars(e);
-                    free_env(&se);
+                    // try many subtype check to avoid false `Union{}`
+                    ccheck = intersect_var_ccheck_in_env(xlb, xub, ylb, yub, e, R);
                 }
                 if (R) flip_offset(e);
                 if (!ccheck)
@@ -4031,6 +4124,8 @@ static jl_value_t *intersect(jl_value_t *x, jl_value_t *y, jl_stenv_t *e, int pa
             assert(e->Loffset == 0);
             record_var_occurrence(xx, e, param);
             record_var_occurrence(yy, e, param);
+            if (param == 1 && xx && yy && (xx->concrete || xx->intvalued) && (yy->concrete || yy->intvalued))
+                return intersect_concrete_covariant_var((jl_tvar_t*)x, (jl_tvar_t*)y, e);
             if (xx && yy && xx->concrete && !yy->concrete) {
                 return intersect_var((jl_tvar_t*)x, y, e, R, param);
             }
