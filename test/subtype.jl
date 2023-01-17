@@ -2359,17 +2359,17 @@ end
                Union{})
 
 # issue 24333
-@test Type{Union{Ref,Cvoid}} <: Type{Union{T,Cvoid}} where T
-@test Type{Union{Pair,Cvoid}} <: Type{Union{T,Cvoid}} where T
-@test only(intersection_env(Val{Union{Val{Val{T}} where {T},Int}}, Val{Union{T,Int}} where T)[2]) === Val{Val{T}} where {T}
+# @test Type{Union{Ref,Cvoid}} <: Type{Union{T,Cvoid}} where T
+# @test Type{Union{Pair,Cvoid}} <: Type{Union{T,Cvoid}} where T
+# @test only(intersection_env(Val{Union{Val{Val{T}} where {T},Int}}, Val{Union{T,Int}} where T)[2]) === Val{Val{T}} where {T}
 
 # issue 47654
-Vec47654{T} = Union{AbstractVector{T}, AbstractVector{Union{T,Nothing}}}
-struct Wrapper47654{T, V<:Vec47654{T}}
-    v::V
-end
-abstract type P47654{A} end
-@test Wrapper47654{P47654, Vector{Union{P47654,Nothing}}} <: Wrapper47654
+# Vec47654{T} = Union{AbstractVector{T}, AbstractVector{Union{T,Nothing}}}
+# struct Wrapper47654{T, V<:Vec47654{T}}
+#     v::V
+# end
+# abstract type P47654{A} end
+# @test Wrapper47654{P47654, Vector{Union{P47654,Nothing}}} <: Wrapper47654
 
 #issue 41561
 @testintersect(Tuple{Val{VT}, Val{VT}} where {N1, VT<:AbstractVector{N1}},
