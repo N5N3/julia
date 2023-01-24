@@ -2009,6 +2009,8 @@ function abstract_call_known(interp::AbstractInterpreter, @nospecialize(f),
         end
     elseif is_return_type(f)
         return return_type_tfunc(interp, argtypes, si, sv)
+    elseif is_infer_effects(f)
+        return infer_effects_tfunc(interp, argtypes, si, sv)
     elseif la == 2 && istopfunction(f, :!)
         # handle Conditional propagation through !Bool
         aty = argtypes[2]

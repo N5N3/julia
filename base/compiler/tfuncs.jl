@@ -2465,8 +2465,8 @@ function intrinsic_effects(f::IntrinsicFunction, argtypes::Vector{Any})
     return Effects(EFFECTS_TOTAL; consistent, effect_free, nothrow)
 end
 
-# TODO: this function is a very buggy and poor model of the return_type function
-# since abstract_call_gf_by_type is a very inaccurate model of _method and of typeinf_type,
+# TODO: this function is a very buggy and poor model of the `return_type` function
+# since `abstract_call_gf_by_type` is a very inaccurate model of `_method` and of `typeinf_type`,
 # while this assumes that it is an absolutely precise and accurate and exact model of both
 function return_type_tfunc(interp::AbstractInterpreter, argtypes::Vector{Any}, si::StmtInfo, sv::Union{InferenceState, IRCode})
     if length(argtypes) == 3
@@ -2493,7 +2493,7 @@ function return_type_tfunc(interp::AbstractInterpreter, argtypes::Vector{Any}, s
                     else
                         call = abstract_call(interp, ArgInfo(nothing, argtypes_vec), si, sv, -1)
                     end
-                    info = verbose_stmt_info(interp) ? MethodResultPure(ReturnTypeCallInfo(call.info)) : MethodResultPure()
+                    info = verbose_stmt_info(interp) ? MethodResultPure(VirtualCallInfo(call.info)) : MethodResultPure()
                     rt = widenslotwrapper(call.rt)
                     if isa(rt, Const)
                         # output was computed to be constant
@@ -2523,6 +2523,30 @@ function return_type_tfunc(interp::AbstractInterpreter, argtypes::Vector{Any}, s
         end
     end
     return CallMeta(Type, EFFECTS_THROWS, NoCallInfo())
+end
+
+# XXX this tfunc has the same unreliability as `return_type_tfunc`, and also some duplications with it
+function infer_effects_tfunc(interp::AbstractInterpreter, argtypes::Vector{Any}, si::StmtInfo, sv::InferenceState)
+    length(argtypes) == 3 || return CallMeta(Effects, EFFECTS_THROWS, NoCallInfo())
+    aft = argtypes[2]
+    tt = argtypes[3]
+    # models the infer_effects function only when the input arguments are fully known
+    if !((isa(tt, Const) || isconstType(tt)) && (isa(aft, Const) || isconstType(aft)))
+        return CallMeta(Effects, EFFECTS_UNKNOWN, NoCallInfo())
+    end
+    af_argtype = isa(tt, Const) ? tt.val : (tt::DataType).parameters[1]
+    (isa(af_argtype, DataType) && af_argtype <: Tuple) || return CallMeta(Effects, EFFECTS_THROWS, NoCallInfo())
+    argtypes_vec = Any[aft, af_argtype.parameters...]
+    old_restrict = sv.restrict_abstract_call_sites
+    sv.restrict_abstract_call_sites = false
+    call = abstract_call(interp, ArgInfo(nothing, argtypes_vec), si, sv, -1)
+    sv.restrict_abstract_call_sites = old_restrict
+    info = verbose_stmt_info(interp) ? MethodResultPure(VirtualCallInfo(call.info)) : MethodResultPure()
+    if !isempty(sv.pclimitations)
+        # conservatively express uncertainty of this result
+        return CallMeta(Effects, EFFECTS_TOTAL, NoCallInfo())
+    end
+    return CallMeta(Const(call.effects), EFFECTS_TOTAL, info)
 end
 
 # N.B.: typename maps type equivalence classes to a single value

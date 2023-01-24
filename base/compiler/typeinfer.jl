@@ -1099,26 +1099,10 @@ function typeinf_ext_toplevel(interp::AbstractInterpreter, linfo::MethodInstance
     return src
 end
 
-function return_type(@nospecialize(f), t::DataType) # this method has a special tfunc
-    world = ccall(:jl_get_tls_world_age, UInt, ())
-    args = Any[_return_type, NativeInterpreter(world), Tuple{Core.Typeof(f), t.parameters...}]
-    return ccall(:jl_call_in_typeinf_world, Any, (Ptr{Ptr{Cvoid}}, Cint), args, length(args))
-end
-
-function return_type(@nospecialize(f), t::DataType, world::UInt)
-    return return_type(Tuple{Core.Typeof(f), t.parameters...}, world)
-end
-
-function return_type(t::DataType)
-    world = ccall(:jl_get_tls_world_age, UInt, ())
-    return return_type(t, world)
-end
-
-function return_type(t::DataType, world::UInt)
-    args = Any[_return_type, NativeInterpreter(world), t]
-    return ccall(:jl_call_in_typeinf_world, Any, (Ptr{Ptr{Cvoid}}, Cint), args, length(args))
-end
-
+return_type(@nospecialize(f), t::DataType) = return_type(f, t, get_tls_world_counter()) # this method has a special tfunc
+return_type(@nospecialize(f), t::DataType, world::UInt) = return_type(Tuple{Core.Typeof(f), t.parameters...}, world)
+return_type(t::DataType) = return_type(t, get_tls_world_counter())
+return_type(t::DataType, world::UInt) = call_in_typeinf_world(Any[_return_type, NativeInterpreter(world), t])
 function _return_type(interp::AbstractInterpreter, t::DataType)
     rt = Union{}
     f = singleton_type(t.parameters[1])
@@ -1137,4 +1121,37 @@ function _return_type(interp::AbstractInterpreter, t::DataType)
         end
     end
     return rt
+end
+
+infer_effects(@nospecialize(f), t::DataType) = infer_effects(f, t, get_tls_world_counter())
+infer_effects(@nospecialize(f), t::DataType, world::UInt) = infer_effects(Tuple{Core.Typeof(f), t.parameters...}, world)
+infer_effects(t::DataType) = infer_effects(t, get_tls_world_counter())
+infer_effects(t::DataType, world::UInt) = call_in_typeinf_world(Any[_infer_effects, NativeInterpreter(world), t])
+function _infer_effects(interp::AbstractInterpreter, t::DataType)
+    f = singleton_type(t.parameters[1])
+    if isa(f, Builtin)
+        args = Any[t.parameters...]
+        popfirst!(args)
+        rt = builtin_tfunction(interp, f, args, nothing)
+        return builtin_effects(typeinf_lattice(interp), f, ArgInfo(nothing, args), rt)
+    else
+        effects = EFFECTS_TOTAL
+        matches = _methods_by_ftype(t, -1, get_world_counter(interp))::Vector
+        if isempty(matches)
+            return Effects(effects; nothrow=false)
+        end
+        for match in matches
+            match = match::MethodMatch
+            frame = typeinf_frame(interp, match.method, match.spec_types, match.sparams, #=run_optimizer=#false)
+            frame === nothing && return Effects()
+            effects = merge_effects(effects, frame.ipo_effects)
+        end
+    end
+    return effects
+end
+
+get_tls_world_counter() = ccall(:jl_get_tls_world_age, UInt, ())
+
+function call_in_typeinf_world(args::Vector{Any})
+    return ccall(:jl_call_in_typeinf_world, Any, (Ptr{Ptr{Cvoid}}, Cint), args, length(args))
 end

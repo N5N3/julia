@@ -1910,3 +1910,10 @@ function elim_full_ir(y)
 end
 
 @test fully_eliminated(elim_full_ir, Tuple{Int})
+
+@test fully_eliminated((Any,); retval=true) do f
+    tt = Tuple{Int}
+    rt = Core.Compiler.return_type(sin, tt)
+    effects = Core.Compiler.infer_effects(sin, tt)
+    rt === Float64 && Core.Compiler.is_effect_free(effects)
+end
