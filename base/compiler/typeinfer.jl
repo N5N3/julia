@@ -1254,26 +1254,10 @@ function typeinf_ext_toplevel(interp::AbstractInterpreter, mi::MethodInstance, s
     return typeinf_ext(interp, mi, source_mode)
 end
 
-function return_type(@nospecialize(f), t::DataType) # this method has a special tfunc
-    world = tls_world_age()
-    args = Any[_return_type, NativeInterpreter(world), Tuple{Core.Typeof(f), t.parameters...}]
-    return ccall(:jl_call_in_typeinf_world, Any, (Ptr{Ptr{Cvoid}}, Cint), args, length(args))
-end
-
-function return_type(@nospecialize(f), t::DataType, world::UInt)
-    return return_type(Tuple{Core.Typeof(f), t.parameters...}, world)
-end
-
-function return_type(t::DataType)
-    world = tls_world_age()
-    return return_type(t, world)
-end
-
-function return_type(t::DataType, world::UInt)
-    args = Any[_return_type, NativeInterpreter(world), t]
-    return ccall(:jl_call_in_typeinf_world, Any, (Ptr{Ptr{Cvoid}}, Cint), args, length(args))
-end
-
+return_type(@nospecialize(f), t::DataType) = return_type(f, t, tls_world_age()) # this method has a special tfunc
+return_type(@nospecialize(f), t::DataType, world::UInt) = return_type(Tuple{Core.Typeof(f), t.parameters...}, world)
+return_type(t::DataType) = return_type(t, tls_world_age())
+return_type(t::DataType, world::UInt) = call_in_typeinf_world(Any[_return_type, NativeInterpreter(world), t])
 function _return_type(interp::AbstractInterpreter, t::DataType)
     rt = Union{}
     f = singleton_type(t.parameters[1])
@@ -1291,4 +1275,35 @@ function _return_type(interp::AbstractInterpreter, t::DataType)
         end
     end
     return rt
+end
+
+infer_effects(@nospecialize(f), t::DataType) = infer_effects(f, t, tls_world_age())
+infer_effects(@nospecialize(f), t::DataType, world::UInt) = infer_effects(Tuple{Core.Typeof(f), t.parameters...}, world)
+infer_effects(t::DataType) = infer_effects(t, tls_world_age())
+infer_effects(t::DataType, world::UInt) = call_in_typeinf_world(Any[_infer_effects, NativeInterpreter(world), t])
+function _infer_effects(interp::AbstractInterpreter, t::DataType)
+    f = singleton_type(t.parameters[1])
+    if isa(f, Builtin)
+        args = Any[t.parameters...]
+        popfirst!(args)
+        rt = builtin_tfunction(interp, f, args, nothing)
+        return builtin_effects(typeinf_lattice(interp), f, args, rt)
+    else
+        effects = EFFECTS_TOTAL
+        matches = _methods_by_ftype(t, -1, get_inference_world(interp))::Vector
+        if isempty(matches)
+            return Effects(effects; nothrow=false)
+        end
+        for match in matches
+            match = match::MethodMatch
+            frame = typeinf_frame(interp, match.method, match.spec_types, match.sparams, #=run_optimizer=#false)
+            frame === nothing && return Effects()
+            effects = merge_effects(effects, frame.ipo_effects)
+        end
+    end
+    return effects
+end
+
+function call_in_typeinf_world(args::Vector{Any})
+    return ccall(:jl_call_in_typeinf_world, Any, (Ptr{Ptr{Cvoid}}, Cint), args, length(args))
 end

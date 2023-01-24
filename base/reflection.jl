@@ -1911,6 +1911,7 @@ function return_types(@nospecialize(f), @nospecialize(types=default_tt(f));
     return rts
 end
 
+if nameof(@__MODULE__) === :Base
 """
     Base.infer_return_type(
         f, types=default_tt(f);
@@ -2216,6 +2217,7 @@ function infer_effects(@nospecialize(f), @nospecialize(types=default_tt(f));
     end
     return effects
 end
+end # if nameof(@__MODULE__) === :Base
 
 """
     print_statement_costs(io::IO, f, types)

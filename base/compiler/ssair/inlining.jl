@@ -1755,7 +1755,7 @@ function late_inline_special_case!(ir::IRCode, idx::Int, stmt::Expr, flag::UInt3
         unionall_call = Expr(:foreigncall, QuoteNode(:jl_type_unionall), Any, svec(Any, Any),
             0, QuoteNode(:ccall), stmt.args[2], stmt.args[3])
         return SomeCase(unionall_call)
-    elseif is_return_type(f)
+    elseif is_return_type(f) || is_infer_effects(f)
         if isconstType(type)
             return SomeCase(quoted(type.parameters[1]))
         elseif isa(type, Const)

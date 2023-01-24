@@ -2885,8 +2885,8 @@ function intrinsic_effects(f::IntrinsicFunction, argtypes::Vector{Any})
     return Effects(EFFECTS_TOTAL; consistent, effect_free, nothrow, inaccessiblememonly)
 end
 
-# TODO: this function is a very buggy and poor model of the return_type function
-# since abstract_call_gf_by_type is a very inaccurate model of _method and of typeinf_type,
+# TODO: this function is a very buggy and poor model of the `return_type` function
+# since `abstract_call_gf_by_type` is a very inaccurate model of `_method` and of `typeinf_type`,
 # while this assumes that it is an absolutely precise and accurate and exact model of both
 function return_type_tfunc(interp::AbstractInterpreter, argtypes::Vector{Any}, si::StmtInfo, sv::AbsIntState)
     UNKNOWN = CallMeta(Type, Any, Effects(EFFECTS_THROWS; nortcall=false), NoCallInfo())
@@ -2936,7 +2936,7 @@ function return_type_tfunc(interp::AbstractInterpreter, argtypes::Vector{Any}, s
     else
         call = abstract_call(interp, ArgInfo(nothing, argtypes_vec), si, sv, #=max_methods=#-1)
     end
-    info = verbose_stmt_info(interp) ? MethodResultPure(ReturnTypeCallInfo(call.info)) : MethodResultPure()
+    info = verbose_stmt_info(interp) ? MethodResultPure(VirtualCallInfo(call.info)) : MethodResultPure()
     rt = widenslotwrapper(call.rt)
     if isa(rt, Const)
         # output was computed to be constant
@@ -2960,6 +2960,64 @@ function return_type_tfunc(interp::AbstractInterpreter, argtypes::Vector{Any}, s
     else
         return CallMeta(Type{<:rt}, Union{}, RT_CALL_EFFECTS, info)
     end
+end
+
+# XXX this tfunc has the same unreliability as `return_type_tfunc`, and also some duplications with it
+function infer_effects_tfunc(interp::AbstractInterpreter, argtypes::Vector{Any}, si::StmtInfo, sv::InferenceState)
+    THROWS = CallMeta(Effects, Any, Effects(EFFECTS_THROWS; nortcall=false), NoCallInfo())
+    UNKNOWN = CallMeta(Effects, Any, Effects(EFFECTS_UNKNOWN; nortcall=false), NoCallInfo())
+    if !(2 <= length(argtypes) <= 3)
+        return THROWS
+    end
+
+    tt = widenslotwrapper(argtypes[end])
+    if !isa(tt, Const) && !(isType(tt) && !has_free_typevars(tt))
+        return THROWS
+    end
+
+    af_argtype = isa(tt, Const) ? tt.val : (tt::DataType).parameters[1]
+    if !isa(af_argtype, DataType) || !(af_argtype <: Tuple)
+        return THROWS
+    end
+
+    if length(argtypes) == 3
+        aft = widenslotwrapper(argtypes[2])
+        if !isa(aft, Const) && !(isType(aft) && !has_free_typevars(aft)) &&
+                !(isconcretetype(aft) && !(aft <: Builtin))
+            return THROWS
+        end
+        # models the infer_effects function only when the input arguments are fully known
+        if !((isa(tt, Const) || isconstType(tt)) && (isa(aft, Const) || isconstType(aft)))
+            return UNKNOWN
+        end
+        argtypes_vec = Any[aft, af_argtype.parameters...]
+    else
+        # models the infer_effects function only when the input arguments are fully known
+        if !((isa(tt, Const) || isconstType(tt)))
+            return UNKNOWN
+        end
+        argtypes_vec = Any[af_argtype.parameters...]
+    end
+
+    # Run the abstract_call without restricting abstract call
+    # sites. Otherwise, our behavior model of abstract_call
+    # below will be wrong.
+    if isa(sv, InferenceState)
+        old_restrict = sv.restrict_abstract_call_sites
+        sv.restrict_abstract_call_sites = false
+        call = abstract_call(interp, ArgInfo(nothing, argtypes_vec), si, sv, #=max_methods=#-1)
+        sv.restrict_abstract_call_sites = old_restrict
+    else
+        call = abstract_call(interp, ArgInfo(nothing, argtypes_vec), si, sv, #=max_methods=#-1)
+    end
+
+    info = verbose_stmt_info(interp) ? MethodResultPure(VirtualCallInfo(call.info)) : MethodResultPure()
+    RT_CALL_EFFECTS = Effects(EFFECTS_TOTAL; nortcall=false)
+    if isa(sv, InferenceState) && !isempty(sv.pclimitations)
+        # conservatively express uncertainty of this result
+        return CallMeta(Effects, Union{}, RT_CALL_EFFECTS, NoCallInfo())
+    end
+    return CallMeta(Const(call.effects), Union{}, RT_CALL_EFFECTS, info)
 end
 
 # a simplified model of abstract_call_gf_by_type for applicable

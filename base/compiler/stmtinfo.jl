@@ -206,15 +206,16 @@ end
 # the AbstractInterpreter.
 
 """
-    info::ReturnTypeCallInfo <: CallInfo
+    info::VirtualCallInfo <: CallInfo
 
-Represents a resolved call of `Core.Compiler.return_type`.
-`info.call` wraps the info corresponding to the call that `Core.Compiler.return_type` call
-was supposed to analyze.
+Represents a resolved call of `Core.Compiler.return_type` or `Core.Compiler.infer_effects`.
+`info.call` wraps the info corresponding to the call that the reflection function was
+supposed to analyze.
 """
-struct ReturnTypeCallInfo <: CallInfo
+struct VirtualCallInfo <: CallInfo
     info::CallInfo
 end
+const ReturnTypeCallInfo = VirtualCallInfo
 
 """
     info::FinalizerInfo <: CallInfo

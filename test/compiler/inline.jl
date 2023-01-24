@@ -2214,3 +2214,10 @@ let ir = Base.code_ircode((Issue52644,); optimize_until="Inlining") do t
     @test irfunc(Issue52644(Tuple{})) === :DataType
     @test_throws MethodError irfunc(Issue52644(Tuple{<:Integer}))
 end
+
+@test fully_eliminated((Any,); retval=true) do f
+    tt = Tuple{Int}
+    rt = Core.Compiler.return_type(sin, tt)
+    effects = Core.Compiler.infer_effects(sin, tt)
+    rt === Float64 && Core.Compiler.is_effect_free(effects)
+end
