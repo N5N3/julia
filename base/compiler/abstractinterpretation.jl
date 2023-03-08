@@ -2304,6 +2304,8 @@ function abstract_call_known(interp::AbstractInterpreter, @nospecialize(f),
         return return_type_tfunc(interp, argtypes, si, sv)
     elseif is_infer_effects(f)
         return infer_effects_tfunc(interp, argtypes, si, sv)
+    elseif is_isconstvalue(f)
+        return isconstvalue_tfunc(interp, argtypes, si, sv)
     elseif la == 3 && f === Core.:(!==)
         # mark !== as exactly a negated call to ===
         call = abstract_call_gf_by_type(interp, f, ArgInfo(fargs, Any[Const(f), Any, Any]), si, Tuple{typeof(f), Any, Any}, sv, max_methods)

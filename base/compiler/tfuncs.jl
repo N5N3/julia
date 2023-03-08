@@ -3020,6 +3020,13 @@ function infer_effects_tfunc(interp::AbstractInterpreter, argtypes::Vector{Any},
     return CallMeta(Const(call.effects), Union{}, RT_CALL_EFFECTS, info)
 end
 
+function isconstvalue_tfunc(interp::AbstractInterpreter, argtypes::Vector{Any}, si::StmtInfo, sv::InferenceState)
+    length(argtypes) == 2 || return CallMeta(Bottom, Any, EFFECTS_THROWS, NoCallInfo())
+    A = argtypes[2]
+    res = (isa(A, Const) || isconstType(A) || issingletontype(A)) ? Const(true) : Const(false)
+    return CallMeta(res, Union{}, EFFECTS_TOTAL, NoCallInfo())
+end
+
 # a simplified model of abstract_call_gf_by_type for applicable
 function abstract_applicable(interp::AbstractInterpreter, argtypes::Vector{Any},
                              sv::AbsIntState, max_methods::Int)
