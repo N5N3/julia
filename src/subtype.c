@@ -3967,19 +3967,27 @@ static int intersect_var_ccheck_in_env(jl_value_t *xlb, jl_value_t *xub, jl_valu
     return ccheck;
 }
 
+static int isequal_var_in_env(jl_tvar_t *x, jl_tvar_t *t, jl_stenv_t *e)
+{
+    jl_varbinding_t *xb = lookup(e, x);
+    jl_value_t *lb = xb ? xb->lb : x->lb;
+    jl_value_t *ub = xb ? xb->ub : x->ub;
+    if (lb == ub && jl_is_typevar(lb)) {
+        jl_tvar_t *nx = (jl_tvar_t *)lb;
+        return nx == t ? 1 : isequal_var_in_env(nx, t, e);
+    }
+    return 0;
+}
+
 static int has_typevar_via_env(jl_value_t *x, jl_tvar_t *t, jl_stenv_t *e)
 {
-    if (e->Loffset == 0) {
-        jl_varbinding_t *temp = e->vars;
-        while (temp != NULL) {
-            if (temp->var == t)
-                break;
-            if (temp->lb == temp->ub &&
-                temp->lb == (jl_value_t *)t &&
-                jl_has_typevar(x, temp->var))
-                return 1;
-            temp = temp->prev;
-        }
+    jl_varbinding_t *temp = e->vars;
+    while (temp != NULL) {
+        if (temp->var == t)
+            break;
+        if (isequal_var_in_env(temp->var, t, e) && jl_has_typevar(x, temp->var))
+            return 1;
+        temp = temp->prev;
     }
     return jl_has_typevar(x, t);
 }
