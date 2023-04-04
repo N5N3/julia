@@ -1537,7 +1537,17 @@ JL_DLLEXPORT jl_value_t *jl_instantiate_unionall(jl_unionall_t *u, jl_value_t *p
 
 jl_unionall_t *jl_rename_unionall(jl_unionall_t *u)
 {
+#ifndef NDEBUG
+    char *str = jl_symbol_name(u->var->name);
+    size_t len = strlen(str);
+    char *nstr = (char *)alloca(len+2);
+    memcpy(nstr, str, len);
+    nstr[len] = '_';
+    nstr[len+1] = 0;
+    jl_tvar_t *v = jl_new_typevar(jl_symbol(nstr), u->var->lb, u->var->ub);
+#else
     jl_tvar_t *v = jl_new_typevar(u->var->name, u->var->lb, u->var->ub);
+#endif
     jl_value_t *t = NULL;
     JL_GC_PUSH2(&v, &t);
     jl_typeenv_t env = { u->var, (jl_value_t *)v, NULL };
