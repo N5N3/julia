@@ -972,6 +972,21 @@ static int subtype_unionall(jl_value_t *t, jl_unionall_t *u, jl_stenv_t *e, int8
     else
         ans = subtype(u->body, t, e, param);
 
+    if (ans && !R && jl_is_uniontype(t)) {
+        // Special handling of Val{Union{Val, Ref}} <: Union{Ref, T} where {T}
+        // if we set `T` with `u->body` then we can replace it with `u` safely.
+        jl_varbinding_t *btemp = e->vars;
+        while (btemp != NULL) {
+            if (btemp->depth0 < vb.depth0) {
+                if (btemp->ub == u->body)
+                    btemp->ub = (jl_value_t *)u;
+                if (btemp->lb == u->body)
+                    btemp->lb = (jl_value_t *)u;     
+            }
+            btemp = btemp->prev;
+        }
+    }
+
     // handle the "diagonal dispatch" rule, which says that a type var occurring more
     // than once, and only in covariant position, is constrained to concrete types. E.g.
     //  ( Tuple{Int, Int}    <: Tuple{T, T} where T) but
@@ -1002,8 +1017,8 @@ static int subtype_unionall(jl_value_t *t, jl_unionall_t *u, jl_stenv_t *e, int8
         return 0;
     }
 
-    jl_varbinding_t *btemp = e->vars;
     if (vb.lb != vb.ub) {
+        jl_varbinding_t * btemp = e->vars;
         while (btemp != NULL) {
             jl_value_t *vu = btemp->ub;
             jl_value_t *vl = btemp->lb;
@@ -1268,7 +1283,7 @@ static int subtype_tuple_tail(jl_datatype_t *xd, jl_datatype_t *yd, int8_t R, jl
              (yi == lastx && !vx && vy && jl_is_concrete_type(xi)))) {
             // fast path for repeated elements
         }
-        else if (e->Runions.depth == 0 && !jl_has_free_typevars(xi) && !jl_has_free_typevars(yi)) {
+        else if ((e->Runions.depth == 0 ? !jl_has_free_typevars(xi) : jl_is_concrete_type(xi)) && !jl_has_free_typevars(yi)) {
             // fast path for separable sub-formulas
             if (!jl_subtype(xi, yi))
                 return 0;

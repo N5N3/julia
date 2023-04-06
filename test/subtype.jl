@@ -2457,6 +2457,7 @@ end
                Union{})
 
 @test only(intersection_env(Val{Union{Val{Val{T}} where {T},Int}}, Val{Union{T,Int}} where T)[2]) === Val{Val{T}} where {T}
+@test only(intersection_env(Val{Union{Val{Val{T}} where {T},Ref}}, Val{Union{T,Ref}} where T)[2]) === Val{Val{T}} where {T}
 
 # issue 47654
 Vec47654{T} = Union{AbstractVector{T}, AbstractVector{Union{T,Nothing}}}
