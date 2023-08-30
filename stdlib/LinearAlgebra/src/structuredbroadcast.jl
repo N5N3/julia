@@ -105,8 +105,8 @@ const TypeFuncs = Union{typeof(round),typeof(trunc),typeof(floor),typeof(ceil)}
 isstructurepreserving(bc::Broadcasted) = isstructurepreserving(bc.f, bc.args...)
 isstructurepreserving(::Union{typeof(abs),typeof(big)}, ::StructuredMatrix) = true
 isstructurepreserving(::TypeFuncs, ::StructuredMatrix) = true
-isstructurepreserving(::TypeFuncs, ::Ref{<:Type}, ::StructuredMatrix) = true
-function isstructurepreserving(::typeof(Base.literal_pow), ::Ref{typeof(^)}, ::StructuredMatrix, ::Ref{Val{N}}) where N
+isstructurepreserving(::TypeFuncs, ::Union{Ref{<:Type},AbstractArray{<:Type,0}}, ::StructuredMatrix) = true
+function isstructurepreserving(::typeof(Base.literal_pow), ::Union{Ref{typeof(^)},AbstractArray{typeof(^),0}}, ::StructuredMatrix, ::Union{Ref{Val{N}},AbstractArray{Val{N},0}}) where N
     return N isa Integer && N > 0
 end
 isstructurepreserving(f, args...) = false
