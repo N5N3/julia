@@ -310,11 +310,13 @@ end
 
 # In general, we simply re-index the parent indices by the provided ones
 SlowSubArray{T,N,P,I} = SubArray{T,N,P,I,false}
-function getindex(V::SubArray{T,N}, I::Vararg{Int,N}) where {T,N}
-    @inline
-    @boundscheck checkbounds(V, I...)
-    @inbounds r = V.parent[reindex(V.indices, I)...]
-    r
+for f in (:getindex, :isassigned, #==:_unsetindex!==#)
+    @eval function $f(V::SubArray{T,N}, I::Vararg{Int,N}) where {T,N}
+        @inline
+        @boundscheck $(f === :isassigned ? :(checkbounds(Bool, V, I...) || return false) : :(checkbounds(V, I...)))
+        @inbounds r = $f(V.parent, reindex(V.indices, I)...)
+        return $(#==f === :_unsetindex! ? :V :==# :r)
+    end
 end
 
 # But SubArrays with fast linear indexing pre-compute a stride and offset
@@ -324,20 +326,21 @@ FastSubArray{T,N,P,I} = SubArray{T,N,P,I,true}
 @inline _reindexlinear(V::FastSubArray, i::Int) = V.offset1 + V.stride1*i
 @inline _reindexlinear(V::FastSubArray, i::AbstractUnitRange{Int}) = V.offset1 .+ V.stride1 .* i
 
-function getindex(V::FastSubArray, i::Int)
-    @inline
-    @boundscheck checkbounds(V, i)
-    @inbounds r = V.parent[_reindexlinear(V, i)]
-    r
-end
-
-# For vector views with linear indexing, we disambiguate to favor the stride/offset
-# computation as that'll generally be faster than (or just as fast as) re-indexing into a range.
-function getindex(V::FastSubArray{<:Any, 1}, i::Int)
-    @inline
-    @boundscheck checkbounds(V, i)
-    @inbounds r = V.parent[_reindexlinear(V, i)]
-    r
+for f in (:getindex, :isassigned, #==:_unsetindex!==#)
+    @eval function $f(V::FastSubArray, i::Int)
+        @inline
+        @boundscheck $(f === :isassigned ? :(checkbounds(Bool, V, i) || return false) : :(checkbounds(V, i)))
+        @inbounds r = $f(V.parent, _reindexlinear(V, i))
+        return $(#==f === :_unsetindex! ? :V :==# :r)
+    end
+    # For vector views with linear indexing, we disambiguate to favor the stride/offset
+    # computation as that'll generally be faster than (or just as fast as) re-indexing into a range.
+    @eval function $f(V::FastSubArray{<:Any, 1}, i::Int)
+        @inline
+        @boundscheck $(f === :isassigned ? :(checkbounds(Bool, V, i) || return false) : :(checkbounds(V, i)))
+        @inbounds r = $f(V.parent, _reindexlinear(V, i))
+        return $(#==f === :_unsetindex! ? :V :==# :r)
+    end
 end
 
 # We can avoid a multiplication if the first parent index is a Colon or AbstractUnitRange,
@@ -407,25 +410,6 @@ function setindex!(V::FastSubArray, x, i::AbstractUnitRange{Int})
 end
 
 @inline setindex!(V::FastSubArray, x, i::Colon) = setindex!(V, x, to_indices(V, (i,))...)
-
-function isassigned(V::SubArray{T,N}, I::Vararg{Int,N}) where {T,N}
-    @inline
-    @boundscheck checkbounds(Bool, V, I...) || return false
-    @inbounds r = isassigned(V.parent, reindex(V.indices, I)...)
-    r
-end
-function isassigned(V::FastSubArray, i::Int)
-    @inline
-    @boundscheck checkbounds(Bool, V, i) || return false
-    @inbounds r = isassigned(V.parent, _reindexlinear(V, i))
-    r
-end
-function isassigned(V::FastSubArray{<:Any, 1}, i::Int)
-    @inline
-    @boundscheck checkbounds(Bool, V, i) || return false
-    @inbounds r = isassigned(V.parent, _reindexlinear(V, i))
-    r
-end
 
 IndexStyle(::Type{<:FastSubArray}) = IndexLinear()
 

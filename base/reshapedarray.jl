@@ -253,34 +253,28 @@ end
 offset_if_vec(i::Integer, axs::Tuple{<:AbstractUnitRange}) = i + first(axs[1]) - 1
 offset_if_vec(i::Integer, axs::Tuple) = i
 
-@inline function isassigned(A::ReshapedArrayLF, index::Int)
-    @boundscheck checkbounds(Bool, A, index) || return false
-    indexparent = index - firstindex(A) + firstindex(parent(A))
-    @inbounds ret = isassigned(parent(A), indexparent)
-    ret
-end
-@inline function isassigned(A::ReshapedArray{T,N}, indices::Vararg{Int, N}) where {T,N}
-    @boundscheck checkbounds(Bool, A, indices...) || return false
-    axp = axes(A.parent)
-    i = offset_if_vec(_sub2ind(size(A), indices...), axp)
-    I = ind2sub_rs(axp, A.mi, i)
-    @inbounds isassigned(A.parent, I...)
-end
+for f in (:getindex, :isassigned, #==:_unsetindex!==#)
+    @eval @inline function $f(A::ReshapedArray{T,N}, indices::Vararg{Int, N}) where {T,N}
+        @boundscheck $(f === :isassigned ? :(checkbounds(Bool, A, indices...) || return false) : :(checkbounds(A, indices...)))
+        axp = axes(A.parent)
+        i = offset_if_vec(_sub2ind(size(A), indices...), axp)
+        I = ind2sub_rs(axp, A.mi, i)
+        @inbounds r = $f(A.parent, I...)
+        return $(#==f === :_unsetindex! ? :A :==# :r)
+    end
 
-@inline function getindex(A::ReshapedArrayLF, index::Int)
-    @boundscheck checkbounds(A, index)
-    indexparent = index - firstindex(A) + firstindex(parent(A))
-    @inbounds ret = parent(A)[indexparent]
-    ret
-end
-@inline function getindex(A::ReshapedArray{T,N}, indices::Vararg{Int,N}) where {T,N}
-    @boundscheck checkbounds(A, indices...)
-    _unsafe_getindex(A, indices...)
-end
-@inline function getindex(A::ReshapedArray, index::ReshapedIndex)
-    @boundscheck checkbounds(parent(A), index.parentindex)
-    @inbounds ret = parent(A)[index.parentindex]
-    ret
+    @eval @inline function $f(A::ReshapedArrayLF, index::Int)
+        @boundscheck $(f === :isassigned ? :(checkbounds(Bool, A, index) || return false) : :(checkbounds(A, index)))
+        indexparent = index - firstindex(A) + firstindex(A.parent)
+        @inbounds r = $f(A.parent, indexparent)
+        return $(#==f === :_unsetindex! ? :A :==# :r)
+    end
+
+    @eval @inline function $f(A::ReshapedArray, index::ReshapedIndex)
+        @boundscheck $(f === :isassigned ? :(checkbounds(Bool, A.parent, index.parentindex) || return false) : :(checkbounds(A.parent, index.parentindex)))
+        @inbounds r = $f(A.parent, index.parentindex)
+        return $(#==f === :_unsetindex! ? :A :==# :r)
+    end
 end
 
 @inline function _unsafe_getindex(A::ReshapedArray{T,N}, indices::Vararg{Int,N}) where {T,N}

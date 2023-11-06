@@ -1614,22 +1614,6 @@ end
 
 ## isassigned
 
-@generated function isassigned(B::BitArray, I_0::Int, I::Int...)
-    N = length(I)
-    quote
-        @nexprs $N d->(I_d = I[d])
-        stride = 1
-        index = I_0
-        @nexprs $N d->begin
-            l = size(B,d)
-            stride *= l
-            @boundscheck 1 <= I_{d-1} <= l || return false
-            index += (I_d - 1) * stride
-        end
-        return isassigned(B, index)
-    end
-end
-
 @propagate_inbounds isassigned(A::AbstractArray, i::CartesianIndex) = isassigned(A, Tuple(i)...)
 @propagate_inbounds function isassigned(A::AbstractArray, i::Union{Integer, CartesianIndex}...)
     return isassigned(A, CartesianIndex(to_indices(A, i)))

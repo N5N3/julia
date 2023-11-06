@@ -65,21 +65,17 @@ function Base.strides(A::PermutedDimsArray{T,N,perm}) where {T,N,perm}
 end
 Base.elsize(::Type{<:PermutedDimsArray{<:Any, <:Any, <:Any, <:Any, P}}) where {P} = Base.elsize(P)
 
-@inline function Base.getindex(A::PermutedDimsArray{T,N,perm,iperm}, I::Vararg{Int,N}) where {T,N,perm,iperm}
-    @boundscheck checkbounds(A, I...)
-    @inbounds val = getindex(A.parent, genperm(I, iperm)...)
-    val
+for f in (:getindex, :isassigned, #==:_unsetindex!==#)
+    @eval @inline function Base.$f(A::PermutedDimsArray{T,N,perm,iperm}, I::Vararg{Int,N}) where {T,N,perm,iperm}
+        @boundscheck $(f === :isassigned ? :(checkbounds(Bool, A, I...) || return false) : :(checkbounds(A, I...)))
+        @inbounds r = Base.$f(A.parent, genperm(I, iperm)...)
+        return $(#==f === :_unsetindex! ? :A :==# :r)
+    end
 end
 @inline function Base.setindex!(A::PermutedDimsArray{T,N,perm,iperm}, val, I::Vararg{Int,N}) where {T,N,perm,iperm}
     @boundscheck checkbounds(A, I...)
     @inbounds setindex!(A.parent, val, genperm(I, iperm)...)
     val
-end
-
-function Base.isassigned(A::PermutedDimsArray{T,N,perm,iperm}, I::Vararg{Int,N}) where {T,N,perm,iperm}
-    @boundscheck checkbounds(Bool, A, I...) || return false
-    @inbounds x = isassigned(A.parent, genperm(I, iperm)...)
-    x
 end
 
 @inline genperm(I::NTuple{N,Any}, perm::Dims{N}) where {N} = ntuple(d -> I[perm[d]], Val(N))

@@ -209,13 +209,13 @@ function full!(A::UnitUpperTriangular)
     B
 end
 
-Base.isassigned(A::UnitLowerTriangular, i::Int, j::Int) =
+Base.@propagate_inbounds Base.isassigned(A::UnitLowerTriangular, i::Int, j::Int) =
     i > j ? isassigned(A.data, i, j) : true
-Base.isassigned(A::LowerTriangular, i::Int, j::Int) =
+Base.@propagate_inbounds Base.isassigned(A::LowerTriangular, i::Int, j::Int) =
     i >= j ? isassigned(A.data, i, j) : true
-Base.isassigned(A::UnitUpperTriangular, i::Int, j::Int) =
+Base.@propagate_inbounds Base.isassigned(A::UnitUpperTriangular, i::Int, j::Int) =
     i < j ? isassigned(A.data, i, j) : true
-Base.isassigned(A::UpperTriangular, i::Int, j::Int) =
+Base.@propagate_inbounds Base.isassigned(A::UpperTriangular, i::Int, j::Int) =
     i <= j ? isassigned(A.data, i, j) : true
 
 Base.isstored(A::UnitLowerTriangular, i::Int, j::Int) =

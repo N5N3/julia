@@ -920,8 +920,10 @@ end
 ## indexing
 
 function isassigned(r::AbstractRange, i::Integer)
+    @inline
     i isa Bool && throw(ArgumentError("invalid index: $i of type Bool"))
-    firstindex(r) <= i <= lastindex(r)
+    @boundscheck return checkbounds(Bool, r, i)
+    return true
 end
 
 # `_getindex` is like `getindex` but does not check if `i isa Bool`

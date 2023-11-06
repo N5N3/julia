@@ -392,10 +392,6 @@ check_ptr_indexable(a::AbstractArray, sz) = false
 
 @propagate_inbounds getindex(a::ReinterpretArray) = a[firstindex(a)]
 
-@propagate_inbounds isassigned(a::ReinterpretArray, inds::Integer...) = checkbounds(Bool, a, inds...) && (check_ptr_indexable(a) || _isassigned_ra(a, inds...))
-@propagate_inbounds isassigned(a::ReinterpretArray, inds::SCartesianIndex2) = isassigned(a.parent, inds.j)
-@propagate_inbounds _isassigned_ra(a::ReinterpretArray, inds...) = true # that is not entirely true, but computing exactly which indexes will be accessed in the parent requires a lot of duplication from the _getindex_ra code
-
 @propagate_inbounds function getindex(a::ReinterpretArray{T,N,S}, inds::Vararg{Int, N}) where {T,N,S}
     check_readable(a)
     check_ptr_indexable(a) && return _getindex_ptr(a, inds...)
@@ -700,6 +696,79 @@ end
         end
     end
     return a
+end
+
+@propagate_inbounds isassigned(a::ReinterpretArray) = isassigned(a, firstindex(a))
+
+@propagate_inbounds function isassigned(a::ReinterpretArray{T,N}, inds::Vararg{Int,N}) where {T,N}
+    check_readable(a)
+    return _isassigned_ra(a, inds...)
+end
+
+@propagate_inbounds function isassigned(a::ReinterpretArray, i::Int)
+    check_readable(a)
+    isa(IndexStyle(a), IndexLinear) && return _isassigned_ra(a, i)
+    inds = _to_subscript_indices(a, i)
+    return isempty(inds) ? _isassigned_ra(a, 1) : _isassigned_ra(a, inds...)
+end
+
+@propagate_inbounds function isassigned(a::ReshapedReinterpretArray{T,N,S}, ind::SCartesianIndex2) where {T,N,S}
+    check_readable(a)
+    return isassigned(a.parent, ind.j)
+end
+
+@inline function _isassigned_ra(a::ReshapedReinterpretArray{T,N,S}, i1::Int, tailinds::Vararg{Int}) where {T,N,S}
+    @boundscheck checkbounds(Bool, a, i1, tailinds...) || return false
+    if sizeof(S) == sizeof(T)
+        @inbounds return isassigned(a.parent, i1, tailinds...)
+    elseif sizeof(S) > sizeof(T)
+        @inbounds return isassigned(a.parent, tailinds...)
+    else
+        n = sizeof(T) ÷ sizeof(S)
+        if isempty(tailinds) && IndexStyle(a.parent) === IndexLinear()
+            offset = n * (i1 - firstindex(a))
+            @inbounds for i = 1:n
+                isassigned(a.parent, i + offset) || return false
+            end
+        else
+            @inbounds for i = 1:n
+                isassigned(a.parent, i, i1, tailinds...) || return false
+            end
+        end
+        return true
+    end
+end
+
+@inline function _isassigned_ra(a::NonReshapedReinterpretArray{T,N,S}, i1::Int, tailinds::Vararg{Int}) where {T,N,S}
+    @boundscheck checkbounds(Bool, a, i1, tailinds...) || return false
+    if sizeof(S) == sizeof(T)
+        return @inbounds isassigned(a.parent, i1, tailinds...)
+    else
+        ind_start, sidx = divrem((i1-1)*sizeof(T), sizeof(S))
+        # Optimizations that avoid branches
+        if sizeof(T) % sizeof(S) == 0
+            # T is bigger than S and contains an integer number of them
+            n = sizeof(T) ÷ sizeof(S)
+            @inbounds for i = 1:n
+                isassigned(a.parent, ind_start + i, tailinds...) || return false
+            end
+            return true
+        elseif sizeof(S) % sizeof(T) == 0
+            # S is bigger than T and contains an integer number of them
+            @inbounds return isassigned(a.parent, ind_start + 1, tailinds...)
+        else
+            i = 1
+            nbytes_copied = 0
+            while nbytes_copied < sizeof(T)
+                @inbounds isassigned(a.parent, ind_start + i, tailinds...) || return false
+                nb = min(sizeof(S) - sidx, sizeof(T)-nbytes_copied)
+                nbytes_copied += nb
+                sidx = 0
+                i += 1
+            end
+            return true
+        end
+    end
 end
 
 # Padding

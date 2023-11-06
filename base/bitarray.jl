@@ -109,7 +109,10 @@ size(B::BitArray) = B.dims
     ifelse(d == 1, B.len, 1)
 end
 
-isassigned(B::BitArray, i::Int) = 1 <= i <= length(B)
+@inline function isassigned(B::BitArray, i::Int)
+    @boundscheck return checkbounds(Bool, B, i)
+    return true
+end
 
 IndexStyle(::Type{<:BitArray}) = IndexLinear()
 
