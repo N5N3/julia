@@ -250,6 +250,7 @@ struct IndexSCartesian2{K} <: IndexStyle end   # K = sizeof(S) ÷ sizeof(T), a s
 IndexStyle(::Type{ReinterpretArray{T,N,S,A,false}}) where {T,N,S,A<:AbstractArray{S,N}} = IndexStyle(A)
 function IndexStyle(::Type{ReinterpretArray{T,N,S,A,true}}) where {T,N,S,A<:AbstractArray{S}}
     if sizeof(T) < sizeof(S)
+        check_ptr_indexable(A) && return IndexLinear()
         IndexStyle(A) === IndexLinear() && return IndexSCartesian2{sizeof(S) ÷ sizeof(T)}()
         return IndexCartesian()
     end
@@ -383,24 +384,23 @@ unsafe_convert(::Type{Ptr{T}}, a::ReinterpretArray{T,N,S} where N) where {T,S} =
     end
 end
 
-check_ptr_indexable(a::ReinterpretArray, sz = elsize(a)) = check_ptr_indexable(parent(a), sz)
-check_ptr_indexable(a::ReshapedArray, sz) = check_ptr_indexable(parent(a), sz)
-check_ptr_indexable(a::FastContiguousSubArray, sz) = check_ptr_indexable(parent(a), sz)
-check_ptr_indexable(a::Array, sz) = sizeof(eltype(a)) !== sz
-check_ptr_indexable(a::Memory, sz) = true
-check_ptr_indexable(a::AbstractArray, sz) = false
+check_ptr_indexable(::Type{<:AbstractArray}) = false
+check_ptr_indexable(T::Type{<:ReinterpretArray}) = check_ptr_indexable(fieldtype(T, 1))
+check_ptr_indexable(T::Type{<:ReshapedArray}) = check_ptr_indexable(fieldtype(T, 1))
+check_ptr_indexable(T::Type{<:FastContiguousSubArray}) = check_ptr_indexable(fieldtype(T, 1))
+check_ptr_indexable(::Type{Array{T,N}}) where {T,N} = aligned_sizeof(T) == sizeof(T) # ensure that parent data has no padding
+check_ptr_indexable(::Type{Memory{T}}) where {T} = aligned_sizeof(T) == sizeof(T) # ensure that parent data has no padding
+check_ptr_indexable(a::ReinterpretArray) = check_ptr_indexable(typeof(a.parent))
 
 @propagate_inbounds getindex(a::ReinterpretArray) = a[firstindex(a)]
 
 @propagate_inbounds function getindex(a::ReinterpretArray{T,N,S}, inds::Vararg{Int, N}) where {T,N,S}
     check_readable(a)
-    check_ptr_indexable(a) && return _getindex_ptr(a, inds...)
     _getindex_ra(a, inds[1], tail(inds))
 end
 
 @propagate_inbounds function getindex(a::ReinterpretArray{T,N,S}, i::Int) where {T,N,S}
     check_readable(a)
-    check_ptr_indexable(a) && return _getindex_ptr(a, i)
     if isa(IndexStyle(a), IndexLinear)
         return _getindex_ra(a, i, ())
     end
@@ -417,103 +417,102 @@ end
     GC.@preserve s return unsafe_load(tptr, ind.i)
 end
 
+@propagate_inbounds function _getindex_ra(a::ReinterpretArray{T,N,S}, i1::Int, tailinds::TT) where {T,N,S,TT}
+    if sizeof(T) != sizeof(S)
+        return check_ptr_indexable(a) ?
+            _getindex_ptr(a, i1, tailinds...) :
+            _getindex_missz(a, i1, tailinds)
+    end
+    # Make sure to match the scalar reinterpret if that is applicable
+    if issingletontype(T) # singleton types
+        @boundscheck checkbounds(a, i1, tailinds...)
+        return T.instance
+    else
+        v = a.parent[i1, tailinds...]
+        return isprimitivetype(T) && isprimitivetype(S) ?
+            reinterpret(T, v) : reinterpret_keeppadding(T, v)
+    end
+end
+
 @inline function _getindex_ptr(a::ReinterpretArray{T}, inds...) where {T}
     @boundscheck checkbounds(a, inds...)
     li = _to_linear_index(a, inds...)
     ap = cconvert(Ptr{T}, a)
-    p = unsafe_convert(Ptr{T}, ap) + sizeof(T) * (li - 1)
-    GC.@preserve ap return unsafe_load(p)
-end
-
-@propagate_inbounds function _getindex_ra(a::NonReshapedReinterpretArray{T,N,S}, i1::Int, tailinds::TT) where {T,N,S,TT}
-    # Make sure to match the scalar reinterpret if that is applicable
-    if sizeof(T) == sizeof(S) && (fieldcount(T) + fieldcount(S)) == 0
-        if issingletontype(T) # singleton types
-            @boundscheck checkbounds(a, i1, tailinds...)
-            return T.instance
-        end
-        return reinterpret(T, a.parent[i1, tailinds...])
+    p = unsafe_convert(Ptr{T}, ap)
+    #TODO: `GC.@preserve ap` would mess JuliaLICM PASS as `ap` might be generated inside the loop
+    if elsize(Ptr{T}) == sizeof(T)
+        GC.@preserve a return unsafe_load(p, li)
     else
-        @boundscheck checkbounds(a, i1, tailinds...)
-        ind_start, sidx = divrem((i1-1)*sizeof(T), sizeof(S))
-        # Optimizations that avoid branches
-        if sizeof(T) % sizeof(S) == 0
-            # T is bigger than S and contains an integer number of them
-            n = sizeof(T) ÷ sizeof(S)
-            t = Ref{T}()
-            GC.@preserve t begin
-                sptr = Ptr{S}(unsafe_convert(Ref{T}, t))
-                for i = 1:n
-                     s = a.parent[ind_start + i, tailinds...]
-                     unsafe_store!(sptr, s, i)
-                end
-            end
-            return t[]
-        elseif sizeof(S) % sizeof(T) == 0
-            # S is bigger than T and contains an integer number of them
-            s = Ref{S}(a.parent[ind_start + 1, tailinds...])
-            GC.@preserve s begin
-                tptr = Ptr{T}(unsafe_convert(Ref{S}, s))
-                return unsafe_load(tptr + sidx)
-            end
-        else
-            i = 1
-            nbytes_copied = 0
-            # This is a bit complicated to deal with partial elements
-            # at both the start and the end. LLVM will fold as appropriate,
-            # once it knows the data layout
-            s = Ref{S}()
-            t = Ref{T}()
-            GC.@preserve s t begin
-                sptr = Ptr{S}(unsafe_convert(Ref{S}, s))
-                tptr = Ptr{T}(unsafe_convert(Ref{T}, t))
-                while nbytes_copied < sizeof(T)
-                    s[] = a.parent[ind_start + i, tailinds...]
-                    nb = min(sizeof(S) - sidx, sizeof(T)-nbytes_copied)
-                    memcpy(tptr + nbytes_copied, sptr + sidx, nb)
-                    nbytes_copied += nb
-                    sidx = 0
-                    i += 1
-                end
-            end
-            return t[]
-        end
+        GC.@preserve a return unsafe_load(p + sizeof(T) * (li - 1))
     end
 end
 
-@propagate_inbounds function _getindex_ra(a::ReshapedReinterpretArray{T,N,S}, i1::Int, tailinds::TT) where {T,N,S,TT}
-    # Make sure to match the scalar reinterpret if that is applicable
-    if sizeof(T) == sizeof(S) && (fieldcount(T) + fieldcount(S)) == 0
-        if issingletontype(T) # singleton types
-            @boundscheck checkbounds(a, i1, tailinds...)
-            return T.instance
-        end
-        return reinterpret(T, a.parent[i1, tailinds...])
-    end
+@propagate_inbounds function _getindex_missz(a::NonReshapedReinterpretArray{T,N,S}, i1::Int, tailinds::TT) where {T,N,S,TT}
     @boundscheck checkbounds(a, i1, tailinds...)
-    if sizeof(T) >= sizeof(S)
+    ind_start, sidx = divrem((i1-1)*sizeof(T), sizeof(S))
+    # Optimizations that avoid branches
+    if sizeof(T) % sizeof(S) == 0
+        # T is bigger than S and contains an integer number of them
+        n = sizeof(T) ÷ sizeof(S)
         t = Ref{T}()
         GC.@preserve t begin
             sptr = Ptr{S}(unsafe_convert(Ref{T}, t))
-            if sizeof(T) > sizeof(S)
-                # Extra dimension in the parent array
-                n = sizeof(T) ÷ sizeof(S)
-                if isempty(tailinds) && IndexStyle(a.parent) === IndexLinear()
-                    offset = n * (i1 - firstindex(a))
-                    for i = 1:n
-                        s = a.parent[i + offset]
-                        unsafe_store!(sptr, s, i)
-                    end
-                else
-                    for i = 1:n
-                        s = a.parent[i, i1, tailinds...]
-                        unsafe_store!(sptr, s, i)
-                    end
+            for i = 1:n
+                s = a.parent[ind_start + i, tailinds...]
+                unsafe_store!(sptr, s, i)
+            end
+        end
+        return t[]
+    elseif sizeof(S) % sizeof(T) == 0
+        # S is bigger than T and contains an integer number of them
+        s = Ref{S}(a.parent[ind_start + 1, tailinds...])
+        GC.@preserve s begin
+            tptr = Ptr{T}(unsafe_convert(Ref{S}, s))
+            return unsafe_load(tptr + sidx)
+        end
+    else
+        i = 1
+        nbytes_copied = 0
+        # This is a bit complicated to deal with partial elements
+        # at both the start and the end. LLVM will fold as appropriate,
+        # once it knows the data layout
+        s = Ref{S}()
+        t = Ref{T}()
+        GC.@preserve s t begin
+            sptr = Ptr{S}(unsafe_convert(Ref{S}, s))
+            tptr = Ptr{T}(unsafe_convert(Ref{T}, t))
+            while nbytes_copied < sizeof(T)
+                s[] = a.parent[ind_start + i, tailinds...]
+                nb = min(sizeof(S) - sidx, sizeof(T)-nbytes_copied)
+                memcpy(tptr + nbytes_copied, sptr + sidx, nb)
+                nbytes_copied += nb
+                sidx = 0
+                i += 1
+            end
+        end
+        return t[]
+    end
+end
+
+@propagate_inbounds function _getindex_missz(a::ReshapedReinterpretArray{T,N,S}, i1::Int, tailinds::TT) where {T,N,S,TT}
+    @boundscheck checkbounds(a, i1, tailinds...)
+    if sizeof(T) > sizeof(S)
+        t = Ref{T}()
+        GC.@preserve t begin
+            sptr = Ptr{S}(unsafe_convert(Ref{T}, t))
+            # Extra dimension in the parent array
+            n = sizeof(T) ÷ sizeof(S)
+            if isempty(tailinds) && IndexStyle(a.parent) === IndexLinear()
+                offset = n * (i1 - firstindex(a))
+                for i = 1:n
+                    s = a.parent[i + offset]
+                    unsafe_store!(sptr, s, i)
                 end
             else
-                # No extra dimension
-                s = a.parent[i1, tailinds...]
-                unsafe_store!(sptr, s)
+                for i = 1:n
+                    s = a.parent[i, i1, tailinds...]
+                    unsafe_store!(sptr, s, i)
+                end
             end
         end
         return t[]
@@ -540,13 +539,11 @@ end
 
 @propagate_inbounds function setindex!(a::ReinterpretArray{T,N,S}, v, inds::Vararg{Int, N}) where {T,N,S}
     check_writable(a)
-    check_ptr_indexable(a) && return _setindex_ptr!(a, v, inds...)
     _setindex_ra!(a, v, inds[1], tail(inds))
 end
 
 @propagate_inbounds function setindex!(a::ReinterpretArray{T,N,S}, v, i::Int) where {T,N,S}
     check_writable(a)
-    check_ptr_indexable(a) && return _setindex_ptr!(a, v, i)
     if isa(IndexStyle(a), IndexLinear)
         return _setindex_ra!(a, v, i, ())
     end
@@ -566,123 +563,121 @@ end
     return a
 end
 
+@propagate_inbounds function _setindex_ra!(a::ReinterpretArray{T,N,S}, v, i1::Int, tailinds::TT) where {T,N,S,TT}
+    v = convert(T, v)::T
+    if sizeof(T) != sizeof(S)
+        return check_ptr_indexable(a) ?
+            _setindex_ptr!(a, v, i1, tailinds...) :
+            _setindex_missz!(a, v, i1, tailinds)
+    end
+    # Make sure to match the scalar reinterpret if that is applicable
+    if issingletontype(T) # singleton types
+        @boundscheck checkbounds(a, i1, tailinds...)
+        # setindex! is a noop except for the index check
+    else
+        # Make sure to match the scalar reinterpret if that is applicable
+        rv = isprimitivetype(T) && isprimitivetype(S) ?
+            reinterpret(S, v) : reinterpret_keeppadding(S, v)
+        setindex!(a.parent, rv, i1, tailinds...)
+    end
+    return a
+end
+
 @inline function _setindex_ptr!(a::ReinterpretArray{T}, v, inds...) where {T}
     @boundscheck checkbounds(a, inds...)
     li = _to_linear_index(a, inds...)
     ap = cconvert(Ptr{T}, a)
-    p = unsafe_convert(Ptr{T}, ap) + sizeof(T) * (li - 1)
-    GC.@preserve ap unsafe_store!(p, v)
-    return a
-end
-
-@propagate_inbounds function _setindex_ra!(a::NonReshapedReinterpretArray{T,N,S}, v, i1::Int, tailinds::TT) where {T,N,S,TT}
-    v = convert(T, v)::T
-    # Make sure to match the scalar reinterpret if that is applicable
-    if sizeof(T) == sizeof(S) && (fieldcount(T) + fieldcount(S)) == 0
-        if issingletontype(T) # singleton types
-            @boundscheck checkbounds(a, i1, tailinds...)
-            # setindex! is a noop except for the index check
-        else
-            setindex!(a.parent, reinterpret(S, v), i1, tailinds...)
-        end
+    p = unsafe_convert(Ptr{T}, ap)
+    #TODO: `GC.@preserve ap` would mess JuliaLICM PASS as `ap` might be generated inside the loop
+    if elsize(Ptr{T}) == sizeof(T)
+        GC.@preserve a unsafe_store!(p, v, li)
     else
-        @boundscheck checkbounds(a, i1, tailinds...)
-        ind_start, sidx = divrem((i1-1)*sizeof(T), sizeof(S))
-        # Optimizations that avoid branches
-        if sizeof(T) % sizeof(S) == 0
-            # T is bigger than S and contains an integer number of them
-            t = Ref{T}(v)
-            GC.@preserve t begin
-                sptr = Ptr{S}(unsafe_convert(Ref{T}, t))
-                n = sizeof(T) ÷ sizeof(S)
-                for i = 1:n
-                    s = unsafe_load(sptr, i)
-                    a.parent[ind_start + i, tailinds...] = s
-                end
-            end
-        elseif sizeof(S) % sizeof(T) == 0
-            # S is bigger than T and contains an integer number of them
-            s = Ref{S}(a.parent[ind_start + 1, tailinds...])
-            GC.@preserve s begin
-                tptr = Ptr{T}(unsafe_convert(Ref{S}, s))
-                unsafe_store!(tptr + sidx, v)
-                a.parent[ind_start + 1, tailinds...] = s[]
-            end
-        else
-            t = Ref{T}(v)
-            s = Ref{S}()
-            GC.@preserve t s begin
-                tptr = Ptr{UInt8}(unsafe_convert(Ref{T}, t))
-                sptr = Ptr{UInt8}(unsafe_convert(Ref{S}, s))
-                nbytes_copied = 0
-                i = 1
-                # Deal with any partial elements at the start. We'll have to copy in the
-                # element from the original array and overwrite the relevant parts
-                if sidx != 0
-                    s[] = a.parent[ind_start + i, tailinds...]
-                    nb = min((sizeof(S) - sidx) % UInt, sizeof(T) % UInt)
-                    memcpy(sptr + sidx, tptr, nb)
-                    nbytes_copied += nb
-                    a.parent[ind_start + i, tailinds...] = s[]
-                    i += 1
-                    sidx = 0
-                end
-                # Deal with the main body of elements
-                while nbytes_copied < sizeof(T) && (sizeof(T) - nbytes_copied) > sizeof(S)
-                    nb = min(sizeof(S), sizeof(T) - nbytes_copied)
-                    memcpy(sptr, tptr + nbytes_copied, nb)
-                    nbytes_copied += nb
-                    a.parent[ind_start + i, tailinds...] = s[]
-                    i += 1
-                end
-                # Deal with trailing partial elements
-                if nbytes_copied < sizeof(T)
-                    s[] = a.parent[ind_start + i, tailinds...]
-                    nb = min(sizeof(S), sizeof(T) - nbytes_copied)
-                    memcpy(sptr, tptr + nbytes_copied, nb)
-                    a.parent[ind_start + i, tailinds...] = s[]
-                end
-            end
-        end
+        GC.@preserve a unsafe_store!(p + sizeof(T) * (li - 1), v)
     end
     return a
 end
 
-@propagate_inbounds function _setindex_ra!(a::ReshapedReinterpretArray{T,N,S}, v, i1::Int, tailinds::TT) where {T,N,S,TT}
-    v = convert(T, v)::T
-    # Make sure to match the scalar reinterpret if that is applicable
-    if sizeof(T) == sizeof(S) && (fieldcount(T) + fieldcount(S)) == 0
-        if issingletontype(T) # singleton types
-            @boundscheck checkbounds(a, i1, tailinds...)
-            # setindex! is a noop except for the index check
-        else
-            setindex!(a.parent, reinterpret(S, v), i1, tailinds...)
-        end
-    end
+@propagate_inbounds function _setindex_missz!(a::NonReshapedReinterpretArray{T,N,S}, v, i1::Int, tailinds::TT) where {T,N,S,TT}
     @boundscheck checkbounds(a, i1, tailinds...)
-    if sizeof(T) >= sizeof(S)
+    ind_start, sidx = divrem((i1-1)*sizeof(T), sizeof(S))
+    # Optimizations that avoid branches
+    if sizeof(T) % sizeof(S) == 0
+        # T is bigger than S and contains an integer number of them
         t = Ref{T}(v)
         GC.@preserve t begin
             sptr = Ptr{S}(unsafe_convert(Ref{T}, t))
-            if sizeof(T) > sizeof(S)
-                # Extra dimension in the parent array
-                n = sizeof(T) ÷ sizeof(S)
-                if isempty(tailinds) && IndexStyle(a.parent) === IndexLinear()
-                    offset = n * (i1 - firstindex(a))
-                    for i = 1:n
-                        s = unsafe_load(sptr, i)
-                        a.parent[i + offset] = s
-                    end
-                else
-                    for i = 1:n
-                        s = unsafe_load(sptr, i)
-                        a.parent[i, i1, tailinds...] = s
-                    end
+            n = sizeof(T) ÷ sizeof(S)
+            for i = 1:n
+                s = unsafe_load(sptr, i)
+                a.parent[ind_start + i, tailinds...] = s
+            end
+        end
+    elseif sizeof(S) % sizeof(T) == 0
+        # S is bigger than T and contains an integer number of them
+        s = Ref{S}(a.parent[ind_start + 1, tailinds...])
+        GC.@preserve s begin
+            tptr = Ptr{T}(unsafe_convert(Ref{S}, s))
+            unsafe_store!(tptr + sidx, v)
+            a.parent[ind_start + 1, tailinds...] = s[]
+        end
+    else
+        t = Ref{T}(v)
+        s = Ref{S}()
+        GC.@preserve t s begin
+            tptr = Ptr{UInt8}(unsafe_convert(Ref{T}, t))
+            sptr = Ptr{UInt8}(unsafe_convert(Ref{S}, s))
+            nbytes_copied = 0
+            i = 1
+            # Deal with any partial elements at the start. We'll have to copy in the
+            # element from the original array and overwrite the relevant parts
+            if sidx != 0
+                s[] = a.parent[ind_start + i, tailinds...]
+                nb = min((sizeof(S) - sidx) % UInt, sizeof(T) % UInt)
+                memcpy(sptr + sidx, tptr, nb)
+                nbytes_copied += nb
+                a.parent[ind_start + i, tailinds...] = s[]
+                i += 1
+                sidx = 0
+            end
+            # Deal with the main body of elements
+            while nbytes_copied < sizeof(T) && (sizeof(T) - nbytes_copied) > sizeof(S)
+                nb = min(sizeof(S), sizeof(T) - nbytes_copied)
+                memcpy(sptr, tptr + nbytes_copied, nb)
+                nbytes_copied += nb
+                a.parent[ind_start + i, tailinds...] = s[]
+                i += 1
+            end
+            # Deal with trailing partial elements
+            if nbytes_copied < sizeof(T)
+                s[] = a.parent[ind_start + i, tailinds...]
+                nb = min(sizeof(S), sizeof(T) - nbytes_copied)
+                memcpy(sptr, tptr + nbytes_copied, nb)
+                a.parent[ind_start + i, tailinds...] = s[]
+            end
+        end
+    end
+    return a
+end
+
+@propagate_inbounds function _setindex_missz!(a::ReshapedReinterpretArray{T,N,S}, v, i1::Int, tailinds::TT) where {T,N,S,TT}
+    @boundscheck checkbounds(a, i1, tailinds...)
+    if sizeof(T) > sizeof(S)
+        t = Ref{T}(v)
+        GC.@preserve t begin
+            sptr = Ptr{S}(unsafe_convert(Ref{T}, t))
+            # Extra dimension in the parent array
+            n = sizeof(T) ÷ sizeof(S)
+            if isempty(tailinds) && IndexStyle(a.parent) === IndexLinear()
+                offset = n * (i1 - firstindex(a))
+                for i = 1:n
+                    s = unsafe_load(sptr, i)
+                    a.parent[i + offset] = s
                 end
-            else # sizeof(T) == sizeof(S)
-                # No extra dimension
-                s = unsafe_load(sptr)
-                a.parent[i1, tailinds...] = s
+            else
+                for i = 1:n
+                    s = unsafe_load(sptr, i)
+                    a.parent[i, i1, tailinds...] = s
+                end
             end
         end
     else
@@ -722,7 +717,7 @@ end
     if sizeof(S) == sizeof(T)
         @inbounds return isassigned(a.parent, i1, tailinds...)
     elseif sizeof(S) > sizeof(T)
-        @inbounds return isassigned(a.parent, tailinds...)
+        @inbounds return check_ptr_indexable(a) || isassigned(a.parent, tailinds...)
     else
         n = sizeof(T) ÷ sizeof(S)
         if isempty(tailinds) && IndexStyle(a.parent) === IndexLinear()
@@ -928,18 +923,13 @@ end
     inpackedsize == outpackedsize ||
         throw(ArgumentError(LazyString("Packed sizes of types ", Out, " and ", In,
             " do not match; got ", outpackedsize, " and ", inpackedsize, ", respectively.")))
-    in = Ref{In}(x)
-    out = Ref{Out}()
     if struct_subpadding(Out, In)
         # if packed the same, just copy
-        GC.@preserve in out begin
-            ptr_in = unsafe_convert(Ptr{In}, in)
-            ptr_out = unsafe_convert(Ptr{Out}, out)
-            memcpy(ptr_out, ptr_in, sizeof(Out))
-        end
-        return out[]
+        return reinterpret_keeppadding(Out, x)
     else
         # mismatched padding
+        in = Ref{In}(x)
+        out = Ref{Out}()
         GC.@preserve in out begin
             ptr_in = unsafe_convert(Ptr{In}, in)
             ptr_out = unsafe_convert(Ptr{Out}, out)
@@ -961,6 +951,11 @@ end
     end
 end
 
+function reinterpret_keeppadding(::Type{Out}, in) where {Out}
+    x = Ref(in)
+    ptr = Ptr{Out}(unsafe_convert(Ptr{eltype(x)}, x))
+    GC.@preserve x return unsafe_load(ptr)
+end
 
 # Reductions with IndexSCartesian2
 

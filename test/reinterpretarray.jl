@@ -322,9 +322,11 @@ test_many_wrappers(fill(1.0, 5, 3), (identity, wrapper)) do a_
 end
 let ar = [(1,2), (3,4)]
     arr = reinterpret(reshape, Int, ar)
+    @test @inferred(IndexStyle(arr)) == IndexLinear()
+    @test @inferred(eachindex(arr)) == @inferred(eachindex(arr, arr)) == Base.OneTo(4)
+    arr = reinterpret(reshape, Int, WrapperArray(ar))
     @test @inferred(IndexStyle(arr)) == Base.IndexSCartesian2{2}()
-    @test @inferred(eachindex(arr)) == Base.SCartesianIndices2{2}(Base.OneTo(2))
-    @test @inferred(eachindex(arr, arr)) == Base.SCartesianIndices2{2}(Base.OneTo(2))
+    @test @inferred(eachindex(arr)) == @inferred(eachindex(arr, arr)) == Base.SCartesianIndices2{2}(Base.OneTo(2))
 end
 # Error on reinterprets that would expose padding
 struct S1
@@ -588,22 +590,26 @@ end
     @test_throws ArgumentError reinterpret(Tuple{Int32, Int64}, (Int16(1), Int64(4)))
 end
 
-let R = reinterpret(Float32, ComplexF32[1.0f0+2.0f0*im, 4.0f0+3.0f0*im])
-    @test !isassigned(R, 0)
-    @test isassigned(R, 1)
-    @test isassigned(R, 4)
-    @test isassigned(R, Int8(2), Int16(1), Int32(1), Int64(1))
-    @test !isassigned(R, 1, 2)
-    @test !isassigned(R, 5)
-    @test Array(R)::Vector{Float32} == [1.0f0, 2.0f0, 4.0f0, 3.0f0]
-end
+let A = ComplexF32[1.0f0+2.0f0*im, 4.0f0+3.0f0*im]
+    test_many_wrappers(A) do A
+        R = reinterpret(Float32, A)
+        @test !isassigned(R, 0)
+        @test isassigned(R, 1)
+        @test isassigned(R, 4)
+        @test isassigned(R, Int8(2), Int16(1), Int32(1), Int64(1))
+        @test !isassigned(R, 1, 2)
+        @test !isassigned(R, 5)
+        @test Array(R)::Vector{Float32} == [1.0f0, 2.0f0, 4.0f0, 3.0f0]
+    end
 
-let R = reinterpret(reshape, Float32, ComplexF32[1.0f0+2.0f0*im, 4.0f0+3.0f0*im])
-    @test !isassigned(R, 0)
-    @test isassigned(R, 1)
-    @test isassigned(R, 4)
-    @test isassigned(R, Int8(2), Int16(2), Int32(1), Int64(1))
-    @test !isassigned(R, 1, 1, 2)
-    @test !isassigned(R, 5)
-    @test Array(R)::Matrix{Float32} == [1.0f0 4.0f0; 2.0f0 3.0f0]
+    test_many_wrappers(A) do A
+        R = reinterpret(reshape, Float32, A)
+        @test !isassigned(R, 0)
+        @test isassigned(R, 1)
+        @test isassigned(R, 4)
+        @test isassigned(R, Int8(2), Int16(2), Int32(1), Int64(1))
+        @test !isassigned(R, 1, 1, 2)
+        @test !isassigned(R, 5)
+        @test Array(R)::Matrix{Float32} == [1.0f0 4.0f0; 2.0f0 3.0f0]
+    end
 end
