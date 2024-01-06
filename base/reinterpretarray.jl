@@ -228,6 +228,7 @@ struct IndexSCartesian2{K} <: IndexStyle end   # K = sizeof(S) ÷ sizeof(T), a s
 IndexStyle(::Type{ReinterpretArray{T,N,S,A,false}}) where {T,N,S,A<:AbstractArray{S,N}} = IndexStyle(A)
 function IndexStyle(::Type{ReinterpretArray{T,N,S,A,true}}) where {T,N,S,A<:AbstractArray{S}}
     if sizeof(T) < sizeof(S)
+        check_ptr_indexable(A) && return IndexLinear()
         IndexStyle(A) === IndexLinear() && return IndexSCartesian2{sizeof(S) ÷ sizeof(T)}()
         return IndexCartesian()
     end
@@ -360,12 +361,13 @@ cconvert(::Type{Ptr{T}}, a::ReinterpretArray{T,N,S} where N) where {T,S} = cconv
     end
 end
 
-check_ptr_indexable(a::ReinterpretArray, sz = elsize(a)) = check_ptr_indexable(parent(a), sz)
-check_ptr_indexable(a::ReshapedArray, sz) = check_ptr_indexable(parent(a), sz)
-check_ptr_indexable(a::FastContiguousSubArray, sz) = check_ptr_indexable(parent(a), sz)
-check_ptr_indexable(a::Array, sz) = sizeof(eltype(a)) !== sz
-check_ptr_indexable(a::Memory, sz) = true
-check_ptr_indexable(a::AbstractArray, sz) = false
+check_ptr_indexable(::Type{<:AbstractArray}) = false
+check_ptr_indexable(T::Type{<:ReinterpretArray}) = check_ptr_indexable(fieldtype(T, 1))
+check_ptr_indexable(T::Type{<:ReshapedArray}) = check_ptr_indexable(fieldtype(T, 1))
+check_ptr_indexable(T::Type{<:FastContiguousSubArray}) = check_ptr_indexable(fieldtype(T, 1))
+check_ptr_indexable(::Type{Array{T,N}}) where {T,N} = true
+check_ptr_indexable(::Type{Memory{T}}) where {T} = true
+check_ptr_indexable(a::ReinterpretArray) = check_ptr_indexable(typeof(a.parent))
 
 @propagate_inbounds getindex(a::ReinterpretArray) = a[firstindex(a)]
 
