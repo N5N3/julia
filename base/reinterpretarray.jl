@@ -832,18 +832,13 @@ end
     inpackedsize == outpackedsize ||
         throw(ArgumentError("Packed sizes of types $Out and $In do not match; got $outpackedsize \
             and $inpackedsize, respectively."))
-    in = Ref{In}(x)
-    out = Ref{Out}()
     if struct_subpadding(Out, In)
         # if packed the same, just copy
-        GC.@preserve in out begin
-            ptr_in = unsafe_convert(Ptr{In}, in)
-            ptr_out = unsafe_convert(Ptr{Out}, out)
-            memcpy(ptr_out, ptr_in, sizeof(Out))
-        end
-        return out[]
+        return reinterpret_keeppadding(Out, x)
     else
         # mismatched padding
+        in = Ref{In}(x)
+        out = Ref{Out}()
         GC.@preserve in out begin
             ptr_in = unsafe_convert(Ptr{In}, in)
             ptr_out = unsafe_convert(Ptr{Out}, out)
@@ -865,6 +860,13 @@ end
     end
 end
 
+function reinterpret_keeppadding(::Type{Out}, in) where {Out}
+    x = Ref(in)
+    GC.@preserve x begin
+        ptr = Ptr{Out}(unsafe_convert(Ptr{typeof(in)}, x))
+        return unsafe_load(ptr)
+    end
+end
 
 # Reductions with IndexSCartesian2
 
