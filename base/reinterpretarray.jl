@@ -847,7 +847,9 @@ end
 function reinterpret_keeppadding(::Type{Out}, in) where {Out}
     x = Ref(in)
     GC.@preserve x begin
-        ptr = Ptr{Out}(unsafe_convert(Ptr{typeof(in)}, x))
+        #FIXME: `unsafe_convert(::Ptr` cause performance issue
+        # ptr = Ptr{Out}(unsafe_convert(Ptr{eltype(x)}, x))
+        ptr = Ptr{Out}(pointer_from_objref(x))
         return unsafe_load(ptr)
     end
 end
