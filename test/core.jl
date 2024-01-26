@@ -8112,3 +8112,9 @@ end
 @test Int isa Union{Union, Type{Union{Int,T1}}} where {T1}
 @test_broken Int isa Union{UnionAll, Type{Union{Int,T2} where {T2<:T1}} where {T1}}
 @test_broken Int isa Union{Union, Type{Union{Int,T1}} where {T1}}
+
+# #51637
+struct A51637 <: AbstractSet{Union{Nothing,A51637}} end
+struct B51637 <: AbstractSet{Union{Tuple{Vararg{Set}},Tuple{Vararg{B51637}}}} end
+struct C51637 <: AbstractSet{Union{Val{<:Set}, Val{<:C51637}}} end
+@test A51637 <: AbstractSet && B51637 <: AbstractSet && C51637<:AbstractSet

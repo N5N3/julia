@@ -556,6 +556,33 @@ static void isort_union(jl_value_t **a, size_t len) JL_NOTSAFEPOINT
     }
 }
 
+static int all_initialized(jl_value_t *t) {
+    if (jl_is_uniontype(t))
+        return all_initialized(((jl_uniontype_t *)t)->a) && 
+            all_initialized(((jl_uniontype_t *)t)->b);
+    if (jl_is_unionall(t))
+        return all_initialized(((jl_unionall_t *)t)->body) && 
+            all_initialized((jl_value_t *)((jl_unionall_t *)t)->var);
+    if (jl_is_typevar(t))
+        return all_initialized(((jl_tvar_t *)t)->lb) && 
+            all_initialized(((jl_tvar_t *)t)->ub);
+    if (jl_is_vararg(t))
+        return ((((jl_vararg_t *)t)->T == NULL) ||
+            all_initialized(((jl_vararg_t *)t)->T)) &&
+               ((((jl_vararg_t *)t)->N == NULL) ||
+            all_initialized(((jl_vararg_t *)t)->N));
+    if (jl_is_datatype(t)) {
+        if (((jl_datatype_t *)t)->super == NULL)
+            return 0;
+        size_t i, n = jl_nparams((jl_datatype_t *)t);
+        for (i = 0; i < n; i++) {
+            if (!all_initialized(jl_tparam((jl_datatype_t *)t, i)))
+                return 0;
+        }
+    }
+    return 1;
+}
+
 static int simple_subtype(jl_value_t *a, jl_value_t *b, int hasfree, int isUnion)
 {
     if (a == jl_bottom_type || b == (jl_value_t*)jl_any_type)
@@ -567,7 +594,10 @@ static int simple_subtype(jl_value_t *a, jl_value_t *b, int hasfree, int isUnion
         if (!mergeable) // issue #24521: don't merge Type{T} where typeof(T) varies
             mergeable = !(jl_is_type_type(a) && jl_is_type_type(b) &&
              jl_typeof(jl_tparam0(a)) != jl_typeof(jl_tparam0(b)));
-        return mergeable && jl_subtype(a, b);
+        int alldefined = !isUnion;
+        if (!alldefined) // issue #51637: skip normization for unintialized DataType
+            alldefined = all_initialized(a) && all_initialized(b);
+        return mergeable && alldefined && jl_subtype(a, b);
     }
     if (jl_is_typevar(a)) {
         jl_value_t *na = ((jl_tvar_t*)a)->ub;
@@ -1324,7 +1354,7 @@ int jl_type_equality_is_identity(jl_value_t *t1, jl_value_t *t2) JL_NOTSAFEPOINT
 static int within_typevar(jl_value_t *t, jl_value_t *vlb, jl_value_t *vub)
 {
     jl_value_t *lb = t, *ub = t;
-    if (jl_is_typevar(t) || jl_has_free_typevars(t)) {
+    if (jl_is_typevar(t) || jl_has_free_typevars(t) || !all_initialized(t)) {
         // TODO: automatically restrict typevars in method definitions based on
         // types they are used in.
         return 1;
@@ -1958,7 +1988,7 @@ static jl_value_t *inst_datatype_inner(jl_datatype_t *dt, jl_svec_t *p, jl_value
             // normalize types equal to wrappers (prepare for Typeofwrapper)
             jl_value_t *tw = extract_wrapper(pi);
             if (tw && tw != pi && (tn != jl_type_typename || jl_typeof(pi) == jl_typeof(tw)) &&
-                    jl_types_equal(pi, tw)) {
+                    all_initialized(pi) && jl_types_equal(pi, tw)) {
                 iparams[i] = tw;
                 if (p) jl_gc_wb(p, tw);
             }
