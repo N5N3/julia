@@ -236,7 +236,6 @@ Extract first entry of slices of array A into existing array R.
 copyfirst!(R::AbstractArray, A::AbstractArray) = mapfirst!(identity, R, A)
 
 function mapfirst!(f::F, R::AbstractArray, A::AbstractArray{<:Any,N}) where {N, F}
-    lsiz = check_reducedims(R, A)
     t = _firstreducedslice(axes(R), axes(A))
     map!(f, R, view(A, t...))
 end
@@ -1012,21 +1011,22 @@ for (fname, op) in [(:sum, :add_sum), (:prod, :mul_prod),
 end
 
 ##### findmin & findmax #####
-# The initial values of Rval are not used if the corresponding indices in Rind are 0.
-#
-function findminmax!(f, op, Rval, Rind, A::AbstractArray{T,N}) where {T,N}
+# Optimized fallback for `keys` with the same axes, e.g. `LinearIndices`, `CartesianIndices`.
+# We initialize `Rval`/`Rind` via `map/copyfirst!` to support non-1 based `A`.
+function _findminmax!(f, op, Rval, Rind, A::AbstractArray{T,N}, keys::AbstractArray{<:Any,N}, init = true) where {T,N}
     (isempty(Rval) || isempty(A)) && return Rval, Rind
     lsiz = check_reducedims(Rval, A)
     for i = 1:N
         axes(Rval, i) == axes(Rind, i) || throw(DimensionMismatch("Find-reduction: outputs must have the same indices"))
     end
+    if init
+        copyfirst!(Rind, keys)
+        mapfirst!(f, Rval, A)
+    end
     # If we're reducing along dimension 1, for efficiency we can make use of a temporary.
     # Otherwise, keep the result in Rval/Rind so that we traverse A in storage order.
     indsAt, indsRt = safe_tail(axes(A)), safe_tail(axes(Rval))
     keep, Idefault = Broadcast.shapeindexer(indsRt)
-    ks = keys(A)
-    y = iterate(ks)
-    zi = zero(eltype(ks))
     if reducedim1(Rval, A)
         i1 = first(axes1(Rval))
         for IA in CartesianIndices(indsAt)
@@ -1034,13 +1034,11 @@ function findminmax!(f, op, Rval, Rind, A::AbstractArray{T,N}) where {T,N}
             @inbounds tmpRv = Rval[i1,IR]
             @inbounds tmpRi = Rind[i1,IR]
             for i in axes(A,1)
-                k, kss = y::Tuple
                 tmpAv = f(@inbounds(A[i,IA]))
-                if tmpRi == zi || op(tmpRv, tmpAv)
+                if op(tmpRv, tmpAv)
                     tmpRv = tmpAv
-                    tmpRi = k
+                    tmpRi = @inbounds keys[i,IA]
                 end
-                y = iterate(ks, kss)
             end
             @inbounds Rval[i1,IR] = tmpRv
             @inbounds Rind[i1,IR] = tmpRi
@@ -1049,15 +1047,12 @@ function findminmax!(f, op, Rval, Rind, A::AbstractArray{T,N}) where {T,N}
         for IA in CartesianIndices(indsAt)
             IR = Broadcast.newindex(IA, keep, Idefault)
             for i in axes(A, 1)
-                k, kss = y::Tuple
                 tmpAv = f(@inbounds(A[i,IA]))
                 @inbounds tmpRv = Rval[i,IR]
-                @inbounds tmpRi = Rind[i,IR]
-                if tmpRi == zi || op(tmpRv, tmpAv)
+                if op(tmpRv, tmpAv)
                     @inbounds Rval[i,IR] = tmpAv
-                    @inbounds Rind[i,IR] = k
+                    @inbounds Rind[i,IR] = keys[i,IA]
                 end
-                y = iterate(ks, kss)
             end
         end
     end
@@ -1075,7 +1070,7 @@ $(_DOCS_ALIASING_WARNING)
 """
 function findmin!(rval::AbstractArray, rind::AbstractArray, A::AbstractArray;
                   init::Bool=true)
-    findminmax!(identity, isgreater, init && !isempty(A) ? fill!(rval, first(A)) : rval, fill!(rind,zero(eltype(keys(A)))), A)
+    _findminmax!(identity, isgreater, rval, rind, A, keys(A), init)
 end
 
 """
@@ -1131,9 +1126,9 @@ function _findmin(f, A, region)
         end
         similar(A, promote_op(f, eltype(A)), ri), zeros(eltype(keys(A)), ri)
     else
-        fA = f(first(A))
-        findminmax!(f, isgreater, fill!(similar(A, _findminmax_inittype(f, A), ri), fA),
-                    zeros(eltype(keys(A)), ri), A)
+        rval = similar(A, _findminmax_inittype(f, A), ri)
+        rind = similar(A, eltype(keys(A)), ri)
+        _findminmax!(f, isgreater, rval, rind, A, keys(A))
     end
 end
 
@@ -1148,7 +1143,7 @@ $(_DOCS_ALIASING_WARNING)
 """
 function findmax!(rval::AbstractArray, rind::AbstractArray, A::AbstractArray;
                   init::Bool=true)
-    findminmax!(identity, isless, init && !isempty(A) ? fill!(rval, first(A)) : rval, fill!(rind,zero(eltype(keys(A)))), A)
+    _findminmax!(identity, isless, rval, rind, A, keys(A), init)
 end
 
 """
@@ -1204,9 +1199,9 @@ function _findmax(f, A, region)
         end
         similar(A, promote_op(f, eltype(A)), ri), zeros(eltype(keys(A)), ri)
     else
-        fA = f(first(A))
-        findminmax!(f, isless, fill!(similar(A, _findminmax_inittype(f, A), ri), fA),
-                    zeros(eltype(keys(A)), ri), A)
+        rval = similar(A, _findminmax_inittype(f, A), ri)
+        rind = similar(A, eltype(keys(A)), ri)
+        _findminmax!(f, isless, rval, rind, A, keys(A))
     end
 end
 

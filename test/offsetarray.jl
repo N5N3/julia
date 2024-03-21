@@ -914,3 +914,11 @@ end
     b = sum(a, dims=1)
     @test b[begin] == sum(r)
 end
+
+# issue #38660
+@testset "`findmin/max` for OffsetArray" begin
+    ov = OffsetVector([-1, 1], 0:1)
+    @test @inferred(findmin(ov; dims = 1)) .|> first == (-1, 0)
+    ov = OffsetVector([-1, 1], -1:0)
+    @test @inferred(findmax(ov; dims = 1)) .|> first == (1, 0)
+end
