@@ -146,7 +146,8 @@ structured arguments.
 For trivial broadcasted values such as `bc::Number`, this reduces to `iszero(bc)`.
 """
 function fzeropreserving(bc)
-    v = fzero(bc)
+    n = count_structedmatrix(StructuredMatrix, bc)
+    v = fzero(bc, Val(n==1))
     isnothing(v) && return false
     v2 = something(v)
     iszerodefined(typeof(v2)) ? iszero(v2) : isequal(v2, 0)
@@ -156,15 +157,20 @@ end
 # expression is stable.  We can test the zero-preservability by applying the function
 # in cases where all other arguments are known scalars against a zero from the structured
 # matrix. If any non-structured matrix argument is not a known scalar, we give up.
-fzero(x::Number) = Some(x)
-fzero(::Type{T}) where T = Some(T)
-fzero(r::Ref) = Some(r[])
-fzero(t::Tuple{Any}) = Some(only(t))
-fzero(S::StructuredMatrix) = Some(zero(eltype(S)))
-fzero(::StructuredMatrix{<:AbstractMatrix{T}}) where {T<:Number} = Some(haszero(T) ? zero(T)*I : nothing)
-fzero(x) = nothing
-function fzero(bc::Broadcast.Broadcasted)
-    args = map(fzero, bc.args)
+fzero(x::Number, ::Val) = Some(x)
+fzero(::Type{T}, ::Val) where T = Some(T)
+fzero(r::Union{Ref,AbstractArray{<:Any,0}}, ::Val) = Some(r[])
+fzero(t::Tuple{Any}, ::Val) = Some(only(t))
+function fzero(S::StructuredMatrix, ::Val{O}) where {O}
+    !O && isone(size(S, 1)) && return Some(S[1, 1])
+    ET = eltype(S)
+    ET <: AbstractMatrix{<:Number} || return Some(zero(ET))
+    T = eltype(ET)
+    return haszero(T) ? Some(zero(T)*I) : nothing
+end
+fzero(x, ::Val) = nothing
+function fzero(bc::Broadcast.Broadcasted, v::Val)
+    args = map(Base.Fix2(fzero, v), bc.args)
     return any(isnothing, args) ? nothing : Some(bc.f(map(something, args)...))
 end
 
