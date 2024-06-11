@@ -5611,6 +5611,10 @@ end
     x::Array{T} where T<:Integer
 end
 
+# issue #54757, allow more type redefinitions
+struct T54757{T} <: DenseVector{Dict{<:Tuple{T54757{Int},Vararg{T54757{T}}},<:AbstractSet{<:T54757}}} end
+struct T54757{T} <: DenseVector{Dict{<:Tuple{T54757{Int},Vararg{T54757{T}}},<:AbstractSet{<:T54757}}} end
+
 let a = Vector{Core.TypeofBottom}(undef, 2)
     @test a[1] == Union{}
     @test a == [Union{}, Union{}]

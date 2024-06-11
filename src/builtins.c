@@ -2205,6 +2205,7 @@ static int equiv_type(jl_value_t *ta, jl_value_t *tb)
     int ok = 1;
     JL_GC_PUSH2(&a, &b);
     a = jl_rewrap_unionall((jl_value_t*)dta->super, dta->name->wrapper);
+    a = jl_substitute_typename(a, dta->name, dtb->name);
     b = jl_rewrap_unionall((jl_value_t*)dtb->super, dtb->name->wrapper);
     if (!jl_types_equal(a, b))
         goto no;
